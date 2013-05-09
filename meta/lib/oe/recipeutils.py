@@ -11,7 +11,7 @@ import os.path
 import tempfile
 import textwrap
 import difflib
-import utils
+from . import utils
 import shutil
 import re
 import fnmatch
@@ -318,7 +318,7 @@ def patch_recipe(d, fn, varvalues, patch=False, relpath=''):
     varfiles = get_var_files(fn, varlist, d)
     locs = localise_file_vars(fn, varfiles, varlist)
     patches = []
-    for f,v in locs.iteritems():
+    for f,v in locs.items():
         vals = {k: varvalues[k] for k in v}
         patchdata = patch_recipe_file(f, vals, patch, relpath)
         if patch:
@@ -536,7 +536,7 @@ def bbappend_recipe(rd, destlayerdir, srcfiles, install=None, wildcardver=False,
     bbappendlines = []
     if extralines:
         if isinstance(extralines, dict):
-            for name, value in extralines.iteritems():
+            for name, value in extralines.items():
                 bbappendlines.append((name, '=', value))
         else:
             # Do our best to split it
@@ -550,14 +550,14 @@ def bbappend_recipe(rd, destlayerdir, srcfiles, install=None, wildcardver=False,
                     raise Exception('Invalid extralines value passed')
 
     def popline(varname):
-        for i in xrange(0, len(bbappendlines)):
+        for i in range(0, len(bbappendlines)):
             if bbappendlines[i][0] == varname:
                 line = bbappendlines.pop(i)
                 return line
         return None
 
     def appendline(varname, op, value):
-        for i in xrange(0, len(bbappendlines)):
+        for i in range(0, len(bbappendlines)):
             item = bbappendlines[i]
             if item[0] == varname:
                 bbappendlines[i] = (item[0], item[1], item[2] + ' ' + value)
@@ -576,7 +576,7 @@ def bbappend_recipe(rd, destlayerdir, srcfiles, install=None, wildcardver=False,
     copyfiles = {}
     if srcfiles:
         instfunclines = []
-        for newfile, origsrcfile in srcfiles.iteritems():
+        for newfile, origsrcfile in srcfiles.items():
             srcfile = origsrcfile
             srcurientry = None
             if not srcfile:
@@ -644,7 +644,7 @@ def bbappend_recipe(rd, destlayerdir, srcfiles, install=None, wildcardver=False,
 
                 if removevar in removevalues:
                     remove = removevalues[removevar]
-                    if isinstance(remove, basestring):
+                    if isinstance(remove, str):
                         if remove in splitval:
                             splitval.remove(remove)
                             changed = True
@@ -674,7 +674,7 @@ def bbappend_recipe(rd, destlayerdir, srcfiles, install=None, wildcardver=False,
 
         varnames = [item[0] for item in bbappendlines]
         if removevalues:
-            varnames.extend(removevalues.keys())
+            varnames.extend(list(removevalues.keys()))
 
         with open(appendpath, 'r') as f:
             (updated, newlines) = bb.utils.edit_metadata(f, varnames, appendfile_varfunc)
@@ -699,7 +699,7 @@ def bbappend_recipe(rd, destlayerdir, srcfiles, install=None, wildcardver=False,
     if copyfiles:
         if machine:
             destsubdir = os.path.join(destsubdir, machine)
-        for newfile, srcfile in copyfiles.iteritems():
+        for newfile, srcfile in copyfiles.items():
             filedest = os.path.join(appenddir, destsubdir, os.path.basename(srcfile))
             if os.path.abspath(newfile) != os.path.abspath(filedest):
                 bb.note('Copying %s to %s' % (newfile, filedest))
@@ -725,12 +725,12 @@ def replace_dir_vars(path, d):
     """Replace common directory paths with appropriate variable references (e.g. /etc becomes ${sysconfdir})"""
     dirvars = {}
     # Sort by length so we get the variables we're interested in first
-    for var in sorted(d.keys(), key=len):
+    for var in sorted(list(d.keys()), key=len):
         if var.endswith('dir') and var.lower() == var:
             value = d.getVar(var, True)
             if value.startswith('/') and not '\n' in value and value not in dirvars:
                 dirvars[value] = var
-    for dirpath in sorted(dirvars.keys(), reverse=True):
+    for dirpath in sorted(list(dirvars.keys()), reverse=True):
         path = path.replace(dirpath, '${%s}' % dirvars[dirpath])
     return path
 

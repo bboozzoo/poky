@@ -10,7 +10,7 @@ inherit utility-tasks
 inherit metadata_scm
 inherit logging
 
-OE_IMPORTS += "os sys time oe.path oe.utils oe.data oe.package oe.packagegroup oe.sstatesig oe.lsb oe.cachedpath"
+OE_IMPORTS += "os sys time oe.path oe.utils oe.types oe.package oe.packagegroup oe.sstatesig oe.lsb oe.cachedpath"
 OE_IMPORTS[type] = "list"
 
 def oe_import(d):
@@ -661,7 +661,7 @@ python do_cleanall() {
     try:
         fetcher = bb.fetch2.Fetch(src_uri, d)
         fetcher.clean()
-    except bb.fetch2.BBFetchException, e:
+    except bb.fetch2.BBFetchException as e:
         raise bb.build.FuncFailed(e)
 }
 do_cleanall[nostamp] = "1"

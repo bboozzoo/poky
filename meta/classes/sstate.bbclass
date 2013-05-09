@@ -235,9 +235,10 @@ def sstate_install(ss, d):
         bb.fatal("If the above message is too much, the simpler version is you're advised to wipe out tmp and rebuild (reusing sstate is fine). That will likely fix things in most (but not all) cases.")
 
     # Write out the manifest
-    f = open(manifest, "w")
+    f = open(manifest, "w", encoding="utf-8", errors="surrogateescape")
     for file in sharedfiles:
         f.write(file + "\n")
+
 
     # We want to ensure that directories appear at the end of the manifest
     # so that when we test to see if they should be deleted any contents
@@ -382,7 +383,7 @@ def sstate_clean_cachefiles(d):
 def sstate_clean_manifest(manifest, d):
     import oe.path
 
-    mfile = open(manifest)
+    mfile = open(manifest, encoding="utf-8")
     entries = mfile.readlines()
     mfile.close()
 

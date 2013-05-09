@@ -69,7 +69,7 @@ def base_get_metadata_git_branch(path, d):
     try:
         rev, _ = bb.process.run('git rev-parse --abbrev-ref HEAD', cwd=path)
     except bb.process.ExecutionError:
-        rev = '<unknown>'
+        return '<unknown>'
     return rev.strip()
 
 def base_get_metadata_git_revision(path, d):
@@ -78,5 +78,6 @@ def base_get_metadata_git_revision(path, d):
     try:
         rev, _ = bb.process.run('git rev-parse HEAD', cwd=path)
     except bb.process.ExecutionError:
-        rev = '<unknown>'
+        return '<unknown>'
     return rev.strip()
+

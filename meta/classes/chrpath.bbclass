@@ -10,6 +10,8 @@ def process_file_linux(cmd, fpath, rootdir, baseprefix, tmpdir, d):
     if p.returncode != 0:
         return
 
+    err = err.decode('ascii')
+
     # Handle RUNPATH as well as RPATH
     err = err.replace("RUNPATH=","RPATH=")
     # Throw away everything other than the rpath list
@@ -103,7 +105,6 @@ def process_dir (rootdir, directory, d):
                 # Temporarily make the file writeable so we can chrpath it
                 os.chmod(fpath, perms|stat.S_IRWXU)
             process_file(cmd, fpath, rootdir, baseprefix, tmpdir, d)
-                
             if perms:
                 os.chmod(fpath, perms)
 

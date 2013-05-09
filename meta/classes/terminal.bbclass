@@ -73,7 +73,7 @@ def oe_terminal(command, title, d):
     # Replace command with an executable wrapper script
     command = emit_terminal_func(command, envdata, d)
 
-    terminal = oe.data.typed_value('OE_TERMINAL', d).lower()
+    terminal = "auto" #oe.data.typed_value('OE_TERMINAL', d).lower()
     if terminal == 'none':
         bb.fatal('Devshell usage disabled with OE_TERMINAL')
     elif terminal != 'auto':

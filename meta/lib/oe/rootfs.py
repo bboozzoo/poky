@@ -10,11 +10,10 @@ import subprocess
 import re
 
 
-class Rootfs(object):
+class Rootfs(object, metaclass=ABCMeta):
     """
     This is an abstract class. Do not instantiate this directly.
     """
-    __metaclass__ = ABCMeta
 
     def __init__(self, d):
         self.d = d
@@ -62,18 +61,10 @@ class Rootfs(object):
 
                 m = r.search(line)
                 if m:
-                    messages.append('[log_check] %s' % line)
-        if messages:
-            if len(messages) == 1:
-                msg = '1 %s message' % type
-            else:
-                msg = '%d %s messages' % (len(messages), type)
-            msg = '[log_check] %s: found %s in the logfile:\n%s' % \
-                (self.d.getVar('PN', True), msg, ''.join(messages))
-            if type == 'error':
-                bb.fatal(msg)
-            else:
-                bb.warn(msg)
+                    found_error = 1
+                    bb.warn('[log_check] In line: [%s]' % line)
+                    bb.warn('[log_check] %s: found an error message in the logfile (keyword \'%s\'):\n[log_check] %s'
+                                    % (self.d.getVar('PN', True), m.group(), line))
 
     def _log_check_warn(self):
         self._log_check_common('warning', '^(warn|Warn|WARNING:)')
@@ -469,6 +460,32 @@ class RpmRootfs(Rootfs):
         # already saved in /etc/rpm-postinsts
         pass
 
+    def _log_check_error(self):
+        r = re.compile('(unpacking of archive failed|Cannot find package|exit 1|ERR|Fail)')
+        log_path = self.d.expand("${T}/log.do_rootfs")
+        with open(log_path, 'r') as log:
+            found_error = 0
+            message = "\n"
+            for line in log.read().split('\n'):
+                if 'log_check' in line:
+                    continue
+                # sh -x may emit code which isn't actually executed
+                if line.startswith('+'):
+                    continue
+
+                m = r.search(line)
+                if m:
+                    found_error = 1
+                    bb.warn('log_check: There were error messages in the logfile')
+                    bb.warn('log_check: Matched keyword: [%s]\n\n' % m.group())
+
+                if found_error >= 1 and found_error <= 5:
+                    message += line + '\n'
+                    found_error += 1
+
+                if found_error == 6:
+                    bb.fatal(message)
+
     def _log_check(self):
         self._log_check_warn()
         self._log_check_error()
@@ -534,7 +551,7 @@ class DpkgOpkgRootfs(Rootfs):
                     pkg_depends = m_depends.group(1)
 
         # remove package dependencies not in postinsts
-        pkg_names = pkgs.keys()
+        pkg_names = list(pkgs.keys())
         for pkg_name in pkg_names:
             deps = pkgs[pkg_name][:]
 
@@ -567,7 +584,7 @@ class DpkgOpkgRootfs(Rootfs):
             pkgs = self._get_pkgs_postinsts(status_file)
         if pkgs:
             root = "__packagegroup_postinst__"
-            pkgs[root] = pkgs.keys()
+            pkgs[root] = list(pkgs.keys())
             _dep_resolve(pkgs, root, pkg_list, [])
             pkg_list.remove(root)
 
