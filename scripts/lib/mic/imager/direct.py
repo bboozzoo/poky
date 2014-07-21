@@ -266,7 +266,6 @@ class DirectImageCreator(BaseImageCreator):
                       self.bootimg_dir, self.kernel_dir, self.native_sysroot)
 
             fstab = self.__write_fstab(p.get_rootfs())
-            self._restore_fstab(fstab)
 
             self.__instimage.add_partition(int(p.size),
                                            p.disk,
@@ -278,6 +277,9 @@ class DirectImageCreator(BaseImageCreator):
                                            boot = p.active,
                                            align = p.align,
                                            part_type = p.part_type)
+
+            self._restore_fstab(fstab)
+
         self.__instimage.layout_partitions(self._ptable_format)
 
         self.__imgdir = self.workdir
