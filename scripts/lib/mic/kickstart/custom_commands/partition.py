@@ -343,7 +343,7 @@ class Wic_PartData(Mic_PartData):
         """
         Prepare an empty ext2/3/4 partition.
         """
-        fs = "%s/fs.%s" % (cr_workdir, self.fstype)
+        fs = "%s/fs_%s.%s" % (cr_workdir, self.label, self.fstype)
 
         dd_cmd = "dd if=/dev/zero of=%s bs=1M seek=%d count=0" % \
             (fs, self.size)
@@ -363,7 +363,7 @@ class Wic_PartData(Mic_PartData):
         """
         Prepare an empty btrfs partition.
         """
-        fs = "%s/fs.%s" % (cr_workdir, self.fstype)
+        fs = "%s/fs_%s.%s" % (cr_workdir, self.label, self.fstype)
 
         dd_cmd = "dd if=/dev/zero of=%s bs=1M seek=%d count=0" % \
             (fs, self.size)
@@ -384,7 +384,7 @@ class Wic_PartData(Mic_PartData):
         """
         Prepare an empty vfat partition.
         """
-        fs = "%s/fs.%s" % (cr_workdir, self.fstype)
+        fs = "%s/fs_%s.%s" % (cr_workdir, self.label, self.fstype)
 
         blocks = self.size * 1024
 
