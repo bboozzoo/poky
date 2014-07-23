@@ -192,6 +192,10 @@ class Wic_PartData(Mic_PartData):
             return self.prepare_rootfs_vfat(cr_workdir, oe_builddir,
                                             rootfs_dir, native_sysroot,
                                             pseudo)
+        elif self.fstype.startswith("squashfs"):
+            return self.prepare_rootfs_squashfs(cr_workdir, oe_builddir,
+                                                rootfs_dir, native_sysroot,
+                                                pseudo)
 
     def prepare_rootfs_ext(self, cr_workdir, oe_builddir, rootfs_dir,
                            native_sysroot, pseudo):
@@ -323,6 +327,28 @@ class Wic_PartData(Mic_PartData):
 
         self.set_size(rootfs_size)
         self.set_source_file(rootfs)
+
+    def prepare_rootfs_squashfs(self, cr_workdir, oe_builddir, rootfs_dir,
+                                native_sysroot, pseudo):
+        """
+        Prepare content for a squashfs rootfs partition.
+        """
+        image_rootfs = rootfs_dir
+        rootfs = "%s/rootfs_%s.%s" % (cr_workdir, self.label ,self.fstype)
+
+        squashfs_cmd = "mksquashfs %s %s -noappend" % \
+                       (image_rootfs, rootfs)
+        rc, out = exec_native_cmd(pseudo + squashfs_cmd, native_sysroot)
+
+        # get the rootfs size in the right units for kickstart (Mb)
+        du_cmd = "du -Lbms %s" % rootfs
+        rc, out = exec_cmd(du_cmd)
+        rootfs_size = out.split()[0]
+
+        self.size = rootfs_size
+        self.source_file = rootfs
+
+        return 0
 
     def prepare_empty_partition(self, cr_workdir, oe_builddir, native_sysroot):
         """
