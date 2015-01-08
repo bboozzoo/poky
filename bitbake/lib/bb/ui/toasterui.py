@@ -62,15 +62,6 @@ def _log_settings_from_server(server):
 
 def main(server, eventHandler, params ):
 
-    includelogs, loglines = _log_settings_from_server(server)
-
-    # verify and warn
-    build_history_enabled = True
-    inheritlist, error = server.runCommand(["getVariable", "INHERIT"])
-    if not "buildhistory" in inheritlist.split(" "):
-        logger.warn("buildhistory is not enabled. Please enable INHERIT += \"buildhistory\" to see image details.")
-        build_history_enabled = False
-
     helper = uihelper.BBUIHelper()
 
     console = logging.StreamHandler(sys.stdout)
@@ -79,6 +70,16 @@ def main(server, eventHandler, params ):
     bb.msg.addDefaultlogFilter(console)
     console.setFormatter(format)
     logger.addHandler(console)
+
+    includelogs, loglines = _log_settings_from_server(server)
+
+    # verify and warn
+    build_history_enabled = True
+    inheritlist, error = server.runCommand(["getVariable", "INHERIT"])
+
+    if not "buildhistory" in inheritlist.split(" "):
+        logger.warn("buildhistory is not enabled. Please enable INHERIT += \"buildhistory\" to see image details.")
+        build_history_enabled = False
 
     if not params.observe_only:
         logger.error("ToasterUI can only work in observer mode")
@@ -261,8 +262,12 @@ def main(server, eventHandler, params ):
                     buildinfohelper.store_missed_state_tasks(event)
                 elif event.type == "ImageFileSize":
                     buildinfohelper.update_target_image_file(event)
+                elif event.type == "ArtifactFileSize":
+                    buildinfohelper.update_artifact_image_file(event)
                 elif event.type == "LicenseManifestPath":
                     buildinfohelper.store_license_manifest_path(event)
+                else:
+                    logger.error("Unprocessed MetadataEvent %s " % str(event))
                 continue
 
             if isinstance(event, bb.cooker.CookerExit):
@@ -304,7 +309,7 @@ def main(server, eventHandler, params ):
             try:
                 buildinfohelper.store_log_exception("%s\n%s" % (str(e), exception_data))
             except Exception as ce:
-                print("CRITICAL: failed to to save toaster exception to the database: %s" % str(ce))
+                logger.error("CRITICAL - Failed to to save toaster exception to the database: %s" % str(ce))
 
             pass
 

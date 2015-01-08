@@ -20,6 +20,11 @@ var libtoaster = (function (){
         source: function(query, process){
           xhrParams.value = query;
           $.getJSON(xhrUrl, this.options.xhrParams, function(data){
+            if (data.error != "ok") {
+              console.log("Error getting data from server "+data.error);
+              return;
+            }
+
             return process (data.list);
           });
         },
@@ -109,11 +114,60 @@ var libtoaster = (function (){
     });
   };
 
+  /* Properties for data can be:
+   * layerDel (csv)
+   * layerAdd (csv)
+   * projectName
+   * projectVersion
+   * machineName
+   */
+  function _editProject(url, projectId, data, onSuccess, onFail){
+    $.ajax({
+        type: "POST",
+        url: url,
+        data: data,
+        headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
+        success: function (data) {
+          if (data.error != "ok") {
+            console.log(data.error);
+            if (onFail != undefined)
+              onFail(data);
+          } else {
+            if (onSuccess != undefined)
+              onSuccess(data);
+          }
+        },
+        error: function (data) {
+          console.log("Call failed");
+          console.log(data);
+        }
+    });
+  };
+
+  function _getLayerDepsForProject(xhrDataTypeaheadUrl, projectId, layerId, onSuccess, onFail){
+    /* Check for dependencies not in the current project */
+    $.getJSON(xhrDataTypeaheadUrl,
+      { type: 'layerdeps', 'value': layerId , project_id: projectId },
+      function(data) {
+        if (data.error != "ok") {
+          console.log(data.error);
+          if (onFail != undefined)
+            onFail(data);
+        } else {
+          onSuccess(data);
+        }
+      }, function() {
+        console.log("E: Failed to make request");
+    });
+  };
+
   return {
     reload_params : reload_params,
     startABuild : _startABuild,
     makeTypeahead : _makeTypeahead,
     getProjectInfo: _getProjectInfo,
+    getLayerDepsForProject : _getLayerDepsForProject,
+    editProject : _editProject,
   }
 })();
 
@@ -212,6 +266,9 @@ $(document).ready(function() {
 
     // show task type and outcome in task details pages
     $(".task-info").tooltip({ container: 'body', html: true, delay: {show: 200}, placement: 'right' });
+
+    // initialise the tooltips for the icon-pencil icons
+    $(".icon-pencil").tooltip({ container: 'body', html: true, delay: {show: 400}, title: "Change" });
 
     // linking directly to tabs
     $(function(){

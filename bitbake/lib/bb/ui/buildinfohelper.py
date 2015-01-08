@@ -26,13 +26,18 @@ os.environ["DJANGO_SETTINGS_MODULE"] = "toaster.toastermain.settings"
 
 import toaster.toastermain.settings as toaster_django_settings
 from toaster.orm.models import Build, Task, Recipe, Layer_Version, Layer, Target, LogMessage, HelpText
-from toaster.orm.models import Target_Image_File
+from toaster.orm.models import Target_Image_File, BuildArtifact
 from toaster.orm.models import Variable, VariableHistory
 from toaster.orm.models import Package, Package_File, Target_Installed_Package, Target_File
 from toaster.orm.models import Task_Dependency, Package_Dependency
 from toaster.orm.models import Recipe_Dependency
 from bb.msg import BBLogFormatter as format
 from django.db import models
+import logging
+
+
+logger = logging.getLogger("BitBake")
+
 
 class NotExisting(Exception):
     pass
@@ -115,7 +120,9 @@ class ORMWrapper(object):
                                     build_name=build_info['build_name'],
                                     bitbake_version=build_info['bitbake_version'])
 
+        logger.debug(1, "buildinfohelper: build is created %s" % build)
         if brbe is not None:
+            logger.debug(1, "buildinfohelper: brbe is %s" % brbe)
             from bldcontrol.models import BuildEnvironment, BuildRequest
             br, be = brbe.split(":")
 
@@ -156,8 +163,7 @@ class ORMWrapper(object):
         build.outcome = outcome
         build.save()
 
-    def update_target_object(self, target, license_manifest_path):
-
+    def update_target_set_license_manifest(self, target, license_manifest_path):
         target.license_manifest_path = license_manifest_path
         target.save()
 
@@ -447,7 +453,17 @@ class ORMWrapper(object):
         target_image_file = Target_Image_File.objects.create( target = target_obj,
                             file_name = file_name,
                             file_size = file_size)
-        target_image_file.save()
+
+    def save_artifact_information(self, build_obj, file_name, file_size):
+        # we skip the image files from other builds
+        if Target_Image_File.objects.filter(file_name = file_name).count() > 0:
+            return
+
+        # do not update artifacts found in other builds
+        if BuildArtifact.objects.filter(file_name = file_name).count() > 0:
+            return
+
+        BuildArtifact.objects.create(build = build_obj, file_name = file_name, file_size = file_size)
 
     def create_logmessage(self, log_information):
         assert 'build' in log_information
@@ -540,7 +556,6 @@ class ORMWrapper(object):
         assert isinstance(build_obj, Build)
 
         helptext_objects = []
-
         for k in vardump:
             desc = vardump[k]['doc']
             if desc is None:
@@ -596,6 +611,7 @@ class BuildInfoHelper(object):
         self.has_build_history = has_build_history
         self.tmp_dir = self.server.runCommand(["getVariable", "TMPDIR"])[0]
         self.brbe    = self.server.runCommand(["getVariable", "TOASTER_BRBE"])[0]
+        logger.debug(1, "buildinfohelper: Build info helper inited %s" % vars(self))
 
 
     def _configure_django(self):
@@ -650,9 +666,11 @@ class BuildInfoHelper(object):
             if (path.startswith(bl.layer.local_path)):
                 return bl
 
-        #TODO: if we get here, we didn't read layers correctly
-        assert False
-        return None
+        #if we get here, we didn't read layers correctly; mockup the new layer
+        unknown_layer, created = Layer.objects.get_or_create(name="unknown", local_path="/", layer_index_url="")
+        unknown_layer_version_obj, created = Layer_Version.objects.get_or_create(layer = unknown_layer, build = self.internal_state['build'])
+
+        return unknown_layer_version_obj
 
     def _get_recipe_information_from_taskfile(self, taskfile):
         localfilepath = taskfile.split(":")[-1]
@@ -715,7 +733,6 @@ class BuildInfoHelper(object):
 
     def store_started_build(self, event):
         assert '_pkgs' in vars(event)
-        assert 'lvs' in self.internal_state, "Layer version information not found; Check if the bitbake server was configured to inherit toaster.bbclass."
         build_information = self._get_build_information()
 
         build_obj = self.orm_wrapper.create_build_object(build_information, self.brbe)
@@ -723,10 +740,13 @@ class BuildInfoHelper(object):
         self.internal_state['build'] = build_obj
 
         # save layer version information for this build
-        for layer_obj in self.internal_state['lvs']:
-            self.orm_wrapper.get_update_layer_version_object(build_obj, layer_obj, self.internal_state['lvs'][layer_obj])
+        if not 'lvs' in self.internal_state:
+            logger.error("Layer version information not found; Check if the bitbake server was configured to inherit toaster.bbclass.")
+        else:
+            for layer_obj in self.internal_state['lvs']:
+                self.orm_wrapper.get_update_layer_version_object(build_obj, layer_obj, self.internal_state['lvs'][layer_obj])
 
-        del self.internal_state['lvs']
+            del self.internal_state['lvs']
 
         # create target information
         target_information = {}
@@ -736,7 +756,8 @@ class BuildInfoHelper(object):
         self.internal_state['targets'] = self.orm_wrapper.create_target_objects(target_information)
 
         # Save build configuration
-        self.orm_wrapper.save_build_variables(build_obj, self.server.runCommand(["getAllKeysWithFlags", ["doc", "func"]])[0])
+        data = self.server.runCommand(["getAllKeysWithFlags", ["doc", "func"]])[0]
+        self.orm_wrapper.save_build_variables(build_obj, [])
 
         return self.brbe
 
@@ -752,6 +773,11 @@ class BuildInfoHelper(object):
                     if t.target in output and output.split('.rootfs.')[1] in image_fstypes:
                         self.orm_wrapper.save_target_image_file_information(t, output, evdata[output])
 
+    def update_artifact_image_file(self, event):
+        evdata = BuildInfoHelper._get_data_from_event(event)
+        for artifact_path in evdata.keys():
+            self.orm_wrapper.save_artifact_information(self.internal_state['build'], artifact_path, evdata[artifact_path])
+
     def update_build_information(self, event, errors, warnings, taskfailures):
         if 'build' in self.internal_state:
             self.orm_wrapper.update_build_object(self.internal_state['build'], errors, warnings, taskfailures)
@@ -760,10 +786,10 @@ class BuildInfoHelper(object):
     def store_license_manifest_path(self, event):
         deploy_dir = BuildInfoHelper._get_data_from_event(event)['deploy_dir']
         image_name = BuildInfoHelper._get_data_from_event(event)['image_name']
-        path = deploy_dir + "/licenses/" + image_name + "/"
+        path = deploy_dir + "/licenses/" + image_name + "/license.manifest"
         for target in self.internal_state['targets']:
             if target.target in image_name:
-                self.orm_wrapper.update_target_object(target, path)
+                self.orm_wrapper.update_target_set_license_manifest(target, path)
 
 
     def store_started_task(self, event):
@@ -958,14 +984,29 @@ class BuildInfoHelper(object):
 
             recipe_info = {}
             recipe_info['name'] = pn
-            recipe_info['version'] = event._depgraph['pn'][pn]['version'].lstrip(":")
             recipe_info['layer_version'] = layer_version_obj
-            recipe_info['summary'] = event._depgraph['pn'][pn]['summary']
-            recipe_info['license'] = event._depgraph['pn'][pn]['license']
-            recipe_info['description'] = event._depgraph['pn'][pn]['description']
-            recipe_info['section'] = event._depgraph['pn'][pn]['section']
-            recipe_info['homepage'] = event._depgraph['pn'][pn]['homepage']
-            recipe_info['bugtracker'] = event._depgraph['pn'][pn]['bugtracker']
+
+            if 'version' in event._depgraph['pn'][pn]:
+                recipe_info['version'] = event._depgraph['pn'][pn]['version'].lstrip(":")
+
+            if 'summary' in event._depgraph['pn'][pn]:
+                recipe_info['summary'] = event._depgraph['pn'][pn]['summary']
+
+            if 'license' in event._depgraph['pn'][pn]:
+                recipe_info['license'] = event._depgraph['pn'][pn]['license']
+
+            if 'description' in event._depgraph['pn'][pn]:
+                recipe_info['description'] = event._depgraph['pn'][pn]['description']
+
+            if 'section' in event._depgraph['pn'][pn]:
+                recipe_info['section'] = event._depgraph['pn'][pn]['section']
+
+            if 'homepage' in event._depgraph['pn'][pn]:
+                recipe_info['homepage'] = event._depgraph['pn'][pn]['homepage']
+
+            if 'bugtracker' in event._depgraph['pn'][pn]:
+                recipe_info['bugtracker'] = event._depgraph['pn'][pn]['bugtracker']
+
             recipe_info['file_path'] = file_name
             recipe = self.orm_wrapper.get_update_recipe_object(recipe_info)
             recipe.is_image = False
@@ -1096,10 +1137,10 @@ class BuildInfoHelper(object):
         if 'build' in self.internal_state and 'backlog' in self.internal_state:
             if len(self.internal_state['backlog']):
                 tempevent = self.internal_state['backlog'].pop()
-                print "DEBUG: Saving stored event ", tempevent
+                logger.debug(1, "buildinfohelper: Saving stored event %s " % tempevent)
                 self.store_log_event(tempevent)
             else:
-                print "ERROR: Events not saved: \n", self.internal_state['backlog']
+                logger.error("buildinfohelper: Events not saved: %s" % self.internal_state['backlog'])
                 del self.internal_state['backlog']
 
         log_information = {}
@@ -1124,4 +1165,4 @@ class BuildInfoHelper(object):
 
         if 'backlog' in self.internal_state:
             for event in self.internal_state['backlog']:
-                   print "NOTE: Unsaved log: ", event.msg
+                   logger.error("Unsaved log: %s", event.msg)

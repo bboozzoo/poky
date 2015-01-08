@@ -128,7 +128,7 @@ projectApp.filter('timediff', function() {
 
 
 // main controller for the project page
-projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $location, $cookies, $q, $sce, $anchorScroll, $animate, $sanitize) {
+projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $location, $cookies, $cookieStore, $q, $sce, $anchorScroll, $animate, $sanitize) {
 
     $scope.getSuggestions = function(type, currentValue) {
         var deffered = $q.defer();
@@ -569,6 +569,44 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
                     "</strong> has been created. You can now <a href=\""+ $scope.urls.layers +
                     "\">add layers</a> and <a href=\""+ $scope.urls.targets +
                     "\">select targets</a> you want to build.", "alert-success");
+        });
+
+        _cmdExecuteWithParam("/layerimported", function (layer) {
+          var imported = $cookieStore.get("layer-imported-alert");
+          var text;
+
+          if (!imported)
+            return;
+
+          if (imported.deps_added.length == 0) {
+            text = "You have imported <strong><a href=\""+$scope.urls.layer+
+              imported.imported_layer.id+"\">"+imported.imported_layer.name+
+              "</a></strong> and added it to your project.";
+          } else {
+            var links = "<a href=\""+$scope.urls.layer+
+              imported.imported_layer.id+"\">"+imported.imported_layer.name+
+              "</a>, ";
+
+            imported.deps_added.map (function(item, index){
+              links +="<a href=\""+$scope.urls.layer+item.id+"\" >"+item.name+
+                "</a>";
+              /*If we're at the last element we don't want the trailing comma */
+              if (imported.deps_added[index+1] != undefined)
+                links += ", ";
+            });
+
+            /* Length + 1 here to do deps + the imported layer */
+            text = "You have imported <strong><a href=\""+$scope.urls.layer+
+              imported.imported_layer.id+"\">"+imported.imported_layer.name+
+              "</a></strong> and added <strong>"+(imported.deps_added.length+1)+
+              "</strong> layers to your project: <strong>"+links+"</strong>";
+          }
+
+            $scope.displayAlert($scope.zone2alerts, text, "alert-info");
+            // This doesn't work
+            $cookieStore.remove("layer-imported-alert");
+            //use jquery plugin instead
+            $.removeCookie("layer-imported-alert", { path: "/"});
         });
 
         _cmdExecuteWithParam("/targetbuild=", function (targets) {

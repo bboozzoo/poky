@@ -390,6 +390,7 @@ python () {
         bb.fatal('This recipe does not have the LICENSE field set (%s)' % pn)
 
     if bb.data.inherits_class('license', d):
+        check_license_format(d)
         unmatched_license_flag = check_license_flags(d)
         if unmatched_license_flag:
             bb.debug(1, "Skipping %s because it has a restricted license not"
@@ -443,7 +444,7 @@ python () {
                 check_license = False
 
         if check_license and bad_licenses:
-            bad_licenses = map(lambda l: canonical_license(d, l), bad_licenses)
+            bad_licenses = expand_wildcard_licenses(d, bad_licenses)
 
             whitelist = []
             for lic in bad_licenses:

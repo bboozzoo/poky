@@ -3863,12 +3863,12 @@
             <glossdef>
                 <para>
                     A space-separated list of files installed into the
-                    boot partition when preparing an image using
-                    <filename>wic</filename> tool with
+                    boot partition when preparing an image using the
+                    <filename>wic</filename> tool with the
                     <filename>bootimg-partition</filename> source
-                    plugin. By default, the files are installed under
+                    plugin.
+                    By default, the files are installed under
                     the same name as the source files.
-
                     To change the installed name, separate it from the
                     original name with a semi-colon (;).  Source files
                     need to be located in <link
@@ -3879,23 +3879,23 @@
      IMAGE_BOOT_FILES = "u-boot.img uImage;kernel"
      IMAGE_BOOT_FILES = "u-boot.${UBOOT_SUFFIX} ${KERNEL_IMAGETYPE}"
                     </literallayout>
-
-                    Alternatively source files can be picked up using
-                    a glob pattern. In this case the destination file
-                    will have the same as base name of the source file
-                    path. To install files into a directory within the
-                    target location pass its name after a semi-colon
-                    (;). Here are two examples:
-
+                    Alternatively, source files can be picked up using
+                    a glob pattern.
+                    In this case, the destination file
+                    will have the same name as the base name of the source file
+                    path.
+                    To install files into a directory within the
+                    target location, pass its name after a semi-colon
+                    (;).
+                    Here are two examples:
                     <literallayout class="monospaced">
      IMAGE_BOOT_FILES = "bcm2835-bootfiles/*"
      IMAGE_BOOT_FILES = "bcm2835-bootfiles/*;boot/"
                     </literallayout>
-
                     The first example installs all files from
                     <filename>${DEPLOY_DIR_IMAGE}/bcm2835-bootfiles</filename>
-                    into the root of the target partition. The second
-                    example installs the same files into a
+                    into the root of the target partition.
+                    The second example installs the same files into a
                     <filename>boot</filename> directory within the
                     target partition.
                 </para>
@@ -10772,7 +10772,8 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
                     <filename>TUNE_ASARGS</filename> is set using
                     the tune include files, which are typically under
                     <filename>meta/conf/machine/include/</filename> and are
-                    influenced through <filename>TUNE_FEATURES</filename>.
+                    influenced through
+                    <link linkend='var-TUNE_FEATURES'><filename>TUNE_FEATURES</filename></link>.
                     For example, the
                     <filename>meta/conf/machine/include/x86/arch-x86.inc</filename>
                     file defines the flags for the x86 architecture as follows:
@@ -10780,8 +10781,10 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
      TUNE_ASARGS += "${@bb.utils.contains("TUNE_FEATURES", "mx32", "-x32", "", d)}"
                     </literallayout>
                     <note>
-                        Board Support Packages (BSPs) can supply their own
-                        set of flags.
+                        Board Support Packages (BSPs) select the tune.
+                        The selected tune, in turn, affects the tune variables
+                        themselves (i.e. the tune can supply its own
+                        set of flags).
                     </note>
                 </para>
             </glossdef>
@@ -10799,10 +10802,13 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
                     <filename>TUNE_CCARGS</filename> is set using
                     the tune include files, which are typically under
                     <filename>meta/conf/machine/include/</filename> and are
-                    influenced through <filename>TUNE_FEATURES</filename>.
+                    influenced through
+                    <link linkend='var-TUNE_FEATURES'><filename>TUNE_FEATURES</filename></link>.
                     <note>
-                        Board Support Packages (BSPs) can supply their own
-                        set of flags.
+                        Board Support Packages (BSPs) select the tune.
+                        The selected tune, in turn, affects the tune variables
+                        themselves (i.e. the tune can supply its own
+                        set of flags).
                     </note>
                 </para>
             </glossdef>
@@ -10820,7 +10826,8 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
                     <filename>TUNE_LDARGS</filename> is set using
                     the tune include files, which are typically under
                     <filename>meta/conf/machine/include/</filename> and are
-                    influenced through <filename>TUNE_FEATURES</filename>.
+                    influenced through
+                    <link linkend='var-TUNE_FEATURES'><filename>TUNE_FEATURES</filename></link>.
                     For example, the
                     <filename>meta/conf/machine/include/x86/arch-x86.inc</filename>
                     file defines the flags for the x86 architecture as follows:
@@ -10828,8 +10835,10 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
      TUNE_LDARGS += "${@bb.utils.contains("TUNE_FEATURES", "mx32", "-m elf32_x86_64", "", d)}"
                     </literallayout>
                     <note>
-                        Board Support Packages (BSPs) can supply their own
-                        set of flags.
+                        Board Support Packages (BSPs) select the tune.
+                        The selected tune, in turn, affects the tune variables
+                        themselves (i.e. the tune can supply its own
+                        set of flags).
                     </note>
                 </para>
             </glossdef>
@@ -10877,19 +10886,11 @@ recipes-graphics/xorg-font/font-alias_1.0.3.bb:PR = "${INC_PR}.3"
                     The package architecture understood by the packaging
                     system to define the architecture, ABI, and tuning of
                     output packages.
-                </para>
-            </glossdef>
-        </glossentry>
-
-        <glossentry id='var-TUNE_PKGARCH_tune'><glossterm><imagedata fileref="figures/define-generic.png" />TUNE_PKGARCH_tune</glossterm>
-            <info>
-                TUNE_PKGARCH_tune[doc] = "The CPU or Application Binary Interface (ABI) specific tuning of the TUNE_PKGARCH."
-            </info>
-            <glossdef>
-                <para>
-                    The CPU or Application Binary Interface (ABI) specific
-                    tuning of the
-                    <link linkend='var-TUNE_PKGARCH'><filename>TUNE_PKGARCH</filename></link>.
+                    The specific tune is defined using the "_tune" override
+                    as follows:
+                    <literallayout class='monospaced'>
+     TUNE_PKGARCH_tune-<replaceable>tune</replaceable> = "<replaceable>tune</replaceable>"
+                    </literallayout>
                 </para>
 
                 <para>

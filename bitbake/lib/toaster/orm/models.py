@@ -20,11 +20,12 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 from django.db import models
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 
 from django.core import validators
+from django.conf import settings
 
 class GitURLValidator(validators.URLValidator):
     import re
@@ -96,6 +97,25 @@ class Project(models.Model):
 
     def __unicode__(self):
         return "%s (%s, %s)" % (self.name, self.release, self.bitbake_version)
+
+    # returns a queryset of compatible layers for a project
+    def compatible_layerversions(self, release = None, layer_name = None):
+        if release == None:
+            release = self.release
+        # layers on the same branch or layers specifically set for this project
+        queryset = Layer_Version.objects.filter((Q(up_branch__name = release.branch_name) & Q(project = None)) | Q(project = self))
+        if layer_name is not None:
+            # we select only a layer name
+            queryset = queryset.filter(layer__name = layer_name)
+
+        # order by layer version priority
+        queryset = queryset.filter(layer_source__releaselayersourcepriority__release = release).order_by("-layer_source__releaselayersourcepriority__priority")
+
+        return queryset
+
+    # returns a set of layer-equivalent set of layers already in project
+    def projectlayer_equivalent_set(self):
+        return [j for i in [x.layercommit.get_equivalents_wpriority(self) for x in self.projectlayer_set.all()] for j in i]
 
     def schedule_build(self):
         from bldcontrol.models import BuildRequest, BRTarget, BRLayer, BRVariable, BRBitbake
@@ -182,6 +202,28 @@ class Build(models.Model):
     def toaster_exceptions(self):
         return self.logmessage_set.filter(level=LogMessage.EXCEPTION)
 
+
+# an Artifact is anything that results from a Build, and may be of interest to the user, and is not stored elsewhere
+class BuildArtifact(models.Model):
+    build = models.ForeignKey(Build)
+    file_name = models.FilePathField()
+    file_size = models.IntegerField()
+
+
+    def get_local_file_name(self):
+        try:
+            deploydir = Variable.objects.get(build = self.build, variable_name="DEPLOY_DIR").variable_value
+            return  self.file_name[len(deploydir)+1:]
+        except:
+            raise
+
+        return self.file_name
+
+
+    def is_available(self):
+        if settings.MANAGED and build.project is not None:
+            return build.buildrequest.environment.has_artifact(file_path)
+        return False
 
 class ProjectTarget(models.Model):
     project = models.ForeignKey(Project)
@@ -456,6 +498,12 @@ class Recipe(models.Model):
 
     def __unicode__(self):
         return "Recipe " + self.name + ":" + self.version
+
+    def get_local_path(self):
+        if settings.MANAGED and self.layer_version.build.project is not None:
+            return self.file_path[len(self.layer_version.layer.local_path)+1:]
+
+        return self.file_path
 
     class Meta:
         unique_together = ("layer_version", "file_path")

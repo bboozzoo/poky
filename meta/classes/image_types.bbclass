@@ -13,7 +13,7 @@ def imagetypes_getdepends(d):
     deps = []
     ctypes = d.getVar('COMPRESSIONTYPES', True).split()
     for type in (d.getVar('IMAGE_FSTYPES', True) or "").split():
-        if type == "vmdk" or type == "live" or type == "iso" or type == "hddimg":
+        if type in ["vmdk", "live", "iso", "hddimg"]:
             type = "ext3"
         basetype = type
         for ctype in ctypes:
@@ -21,6 +21,8 @@ def imagetypes_getdepends(d):
                 basetype = type[:-len("." + ctype)]
                 adddep(d.getVar("COMPRESS_DEPENDS_%s" % ctype, True), deps)
                 break
+        for typedepends in (d.getVar("IMAGE_TYPEDEP_%s" % basetype, True) or "").split():
+            adddep(d.getVar('IMAGE_DEPENDS_%s' % typedepends, True) , deps)
         adddep(d.getVar('IMAGE_DEPENDS_%s' % basetype, True) , deps)
 
     depstr = ""
@@ -70,7 +72,11 @@ IMAGE_CMD_cpio () {
 	(cd ${IMAGE_ROOTFS} && find . | cpio -o -H newc >${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.rootfs.cpio)
 	if [ ! -e ${IMAGE_ROOTFS}/init ]; then
 		mkdir -p ${WORKDIR}/cpio_append
-		touch ${WORKDIR}/cpio_append/init
+		if [ -e ${IMAGE_ROOTFS}/sbin/init -o -L ${IMAGE_ROOTFS}/sbin/init ]; then
+			ln -sf /sbin/init ${WORKDIR}/cpio_append/init
+		else
+			touch ${WORKDIR}/cpio_append/init
+		fi
 		(cd  ${WORKDIR}/cpio_append && echo ./init | cpio -oA -H newc -F ${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.rootfs.cpio)
 	fi
 }
