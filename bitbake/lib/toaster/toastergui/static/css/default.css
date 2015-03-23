@@ -2,6 +2,12 @@
 .logo img { height: 30px; width: auto !important; }
 .logo { padding-top: 4px !important; padding-bottom:0px !important; }
 
+/* style the version information */
+.brand > a { color: #777; }
+.brand > a:hover { color: #999; text-decoration: none; }
+.icon-info-sign { color: #777; font-size: 16px; margin-left: 5px;}
+.icon-info-sign:hover { color: #999; cursor: pointer; }
+
 /* Style the breadcrumb */
 .breadcrumb { display: inline-block; background-color: transparent; }
 .section { margin: 20px 0; }
@@ -15,7 +21,7 @@
 .get-help-yellow:hover { color: #B38942; cursor: pointer; }
 .get-help-red { color: #B94A48; font-size: 16px; padding-left: 2px; }
 .get-help-red:hover { color: #943A38; cursor: pointer; }
-.build-form .get-help { margin-left: 5px; }
+.build-form>i:first-of-type { margin-left: 5px; }
 .manual { margin: 11px 15px;}
 .heading-help { font-size: 14px; }
 
@@ -38,7 +44,7 @@ dd code, .alert code { white-space: pre-wrap; word-break: break-all; word-wrap: 
 dd ul { list-style-type: none; margin: 0px; }
 dt, dd  {line-height: 25px; }
 dd li { line-height: 25px; }
-dd p { line-height: 20px; }
+.item-info dd { line-height: 20px; margin-bottom: 10px; }
 
 /* Style the filter modal dialogs */
 .modal { width: 800px; margin-left: -400px; }
@@ -139,12 +145,13 @@ select { width: auto; }
 /* styles for showing the project name in build mode */
 .project-name { padding-top: 0; }
 .project-name .label { font-weight: normal; margin-bottom: 5px; margin-left: -15px; padding: 5px; }
+.project-name .label > a { color: #fff; font-weight: normal; }
 
 /* Remove bottom margin for forms inside modal dialogs */
 #dependencies_modal_form { margin-bottom: 0px; }
 
 /* Configuration styles */
-.icon-trash { color: #B94A48; font-size: 16px; padding-left: 2px; }
+.icon-trash { color: #B94A48; font-size: 16px; padding-left: 5px; }
 .icon-trash:hover { color: #943A38; text-decoration: none; cursor: pointer; }
 .icon-pencil, .icon-download-alt, .icon-refresh, .icon-star-empty, .icon-star, .icon-tasks { font-size: 16px; color: #0088CC; padding-left: 2px; }
 .icon-pencil:hover, .icon-download-alt:hover, .icon-refresh:hover, .icon-star-empty:hover, .icon-star:hover, .icon-tasks:hover { color: #005580; text-decoration: none; cursor: pointer; }
@@ -184,7 +191,6 @@ a code:hover { color: #005580; }
 .control-group { margin-bottom: 0px; }
 #project-details form { margin: 0px; }
 dd form { margin: 10px 0 0 0; }
-dd form { margin-bottom: 0px; }
 dl textarea { resize: vertical; }
 .navbar-fixed-top {  z-index: 1; }
 .popover { z-index: 2; }
@@ -200,7 +206,6 @@ dl textarea { resize: vertical; }
 .lead .help-block { font-size: 14px; line-height: 20px; font-weight: normal; }
 .button-place  .btn { margin: 0 0 20px 0; }
 .tooltip-inner { max-width: 250px; }
-dd > span { line-height: 20px; }
 .new-build { padding: 20px; }
 .new-build li { line-height: 30px; }
 .new-build h6 { margin: 10px 0 0 0; color: #5a5a5a; }
@@ -208,6 +213,8 @@ dd > span { line-height: 20px; }
 .new-build form { margin: 5px 0 0; }
 .new-build .input-append { margin-bottom: 0; }
 #build-selected { margin-top: 15px; }
+div.add-deps { margin-top: 15px; }
+.btn.log { margin-left: 20px; }
 
 
 .animate-repeat {
@@ -232,3 +239,10 @@ dd > span { line-height: 20px; }
 .animate-repeat.ng-enter.ng-enter-active {
   opacity:1;
 }
+
+@keyframes machines-fade { 0% { background-color: #D9EDF7; } 25% { background-color: #D9EDF7; } 100% { background-color: white; } }
+@-webkit-keyframes machines-fade { 0% { background-color: #D9EDF7; } 25% { background-color: #D9EDF7; } 100% { background-color: white; } }
+
+.machines-highlight { -webkit-animation: machines-fade 7s 1; -moz-animation: machines-fade 7s 1; animation: machines-fade 7s 1; }
+
+.tab-pane table { margin-top: 10px; }

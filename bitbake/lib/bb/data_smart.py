@@ -296,8 +296,13 @@ class VariableHistory(object):
                 self.variables[var] = []
 
 class DataSmart(MutableMapping):
-    def __init__(self, special = COWDictBase.copy(), seen = COWDictBase.copy() ):
+    def __init__(self, special = None, seen = None ):
         self.dict = {}
+
+        if special is None:
+            special = COWDictBase.copy()
+        if seen is None:
+            seen = COWDictBase.copy()
 
         self.inchistory = IncludeHistory()
         self.varhistory = VariableHistory(self)
@@ -616,7 +621,8 @@ class DataSmart(MutableMapping):
                 cachename = var + "[" + flag + "]"
             value = self.expand(value, cachename)
         if value and flag == "_content" and local_var is not None and "_removeactive" in local_var:
-            removes = [self.expand(r) for r in local_var["_removeactive"]]
+            removes = [self.expand(r).split()  for r in local_var["_removeactive"]]
+            removes = reduce(lambda a, b: a+b, removes, [])
             filtered = filter(lambda v: v not in removes,
                               value.split())
             value = " ".join(filtered)

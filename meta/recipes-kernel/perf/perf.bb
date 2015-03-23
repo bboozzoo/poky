@@ -32,7 +32,7 @@ DEPENDS = " \
     bison flex \
 "
 
-do_configure[depends] += "virtual/kernel:do_install"
+do_configure[depends] += "virtual/kernel:do_shared_workdir"
 
 PROVIDES = "virtual/perf"
 
@@ -64,7 +64,8 @@ B = "${WORKDIR}/${BPN}-${PV}"
 
 SCRIPTING_DEFINES = "${@perf_feature_enabled('perf-scripting', '', 'NO_LIBPERL=1 NO_LIBPYTHON=1',d)}"
 TUI_DEFINES = "${@perf_feature_enabled('perf-tui', '', 'NO_NEWT=1',d)}"
-LIBUNWIND_DEFINES = "${@perf_feature_enabled('perf-libunwind', '', 'NO_LIBUNWIND=1',d)}"
+LIBUNWIND_DEFINES = "${@perf_feature_enabled('perf-libunwind', '', 'NO_LIBUNWIND=1 NO_LIBDW_DWARF_UNWIND=1',d)}"
+LIBNUMA_DEFINES = "${@perf_feature_enabled('perf-libnuma', '', 'NO_LIBNUMA=1',d)}"
 
 # The LDFLAGS is required or some old kernels fails due missing
 # symbols and this is preferred than requiring patches to every old
@@ -80,7 +81,8 @@ EXTRA_OEMAKE = '\
     AR="${AR}" \
     EXTRA_CFLAGS="-ldw" \
     perfexecdir=${libexecdir} \
-    NO_GTK2=1 ${TUI_DEFINES} NO_DWARF=1 ${LIBUNWIND_DEFINES} ${SCRIPTING_DEFINES} \
+    NO_GTK2=1 ${TUI_DEFINES} NO_DWARF=1 ${LIBUNWIND_DEFINES} \
+    ${SCRIPTING_DEFINES} ${LIBNUMA_DEFINES} \
 '
 
 EXTRA_OEMAKE += "\
@@ -96,7 +98,6 @@ EXTRA_OEMAKE += "\
     'infodir=${@os.path.relpath(infodir, prefix)}' \
 "
 
-PARALLEL_MAKE = ""
 
 do_compile() {
 	# Linux kernel build system is expected to do the right thing
@@ -115,6 +116,10 @@ do_install() {
 }
 
 do_configure_prepend () {
+    # Fix for rebuilding
+    rm -rf ${B}/
+    mkdir ${B}/
+
     #kernels before 3.1 do not support WERROR env variable
     sed -i 's,-Werror ,,' ${S}/tools/perf/Makefile
     if [ -e "${S}/tools/perf/config/Makefile" ]; then
@@ -165,7 +170,7 @@ PACKAGE_ARCH = "${MACHINE_ARCH}"
 
 PACKAGES =+ "${PN}-archive ${PN}-tests ${PN}-perl ${PN}-python"
 
-RDEPENDS_${PN} += "elfutils"
+RDEPENDS_${PN} += "elfutils bash"
 RDEPENDS_${PN}-archive =+ "bash"
 RDEPENDS_${PN}-python =+ "bash python"
 RDEPENDS_${PN}-perl =+ "bash perl perl-modules"

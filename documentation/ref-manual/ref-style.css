@@ -203,15 +203,6 @@ div.variablelist dl {
   font-weight: normal;
   width: 0em;
   text-align: right;
-  margin-top: 4em;
-  margin-left: .5em;
-  margin-bottom: 0em;
-    -webkit-column-count: 2; /* Chrome, Safari, Opera */
-    -moz-column-count: 2; /* Firefox */
-    column-count: 2;
-    -webkit-column-gap: 4px; /* Chrome, Safari, Opera */
-    -moz-column-gap: 4px; /* Firefox */
-    column-gap: 4px;
 }
 
 .variablelist dl dt {
@@ -220,8 +211,9 @@ div.variablelist dl {
 
 .glossary dl dd,
 .variablelist dl dd {
-  margin-top: -3.5em;
+  margin-top: 0em;
   margin-left: 15.5em;
+  margin-bottom: 2em;
 }
 
 .glossary dd p,
@@ -230,6 +222,9 @@ div.variablelist dl {
   margin-bottom: 1em;
 }
 
+.glossdeffirst {
+  text-indent: -70px;
+}
 
 div.calloutlist table td {
   padding: 0em 0em 0em 0em;

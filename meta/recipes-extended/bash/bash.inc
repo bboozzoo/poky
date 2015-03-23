@@ -4,9 +4,7 @@ SECTION = "base/shell"
 
 DEPENDS = "ncurses bison-native"
 
-inherit autotools-brokensep gettext texinfo update-alternatives ptest
-
-PARALLEL_MAKE = ""
+inherit autotools gettext texinfo update-alternatives ptest
 
 EXTRA_AUTORECONF += "--exclude=autoheader"
 EXTRA_OECONF = "--enable-job-control"

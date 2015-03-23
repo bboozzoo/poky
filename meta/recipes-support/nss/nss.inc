@@ -16,6 +16,7 @@ SRC_URI = "\
     file://nss-fix-support-cross-compiling.patch \
     file://nss-no-rpath-for-cross-compiling.patch \
     file://nss-fix-incorrect-shebang-of-perl.patch \
+    file://nss-fix-nsinstall-build.patch \
 "
 SRC_URI_append = "\
     file://nss.pc.in \
@@ -25,7 +26,7 @@ inherit siteinfo
 
 DEPENDS = "sqlite3 nspr zlib nss-native"
 DEPENDS_class-native = "sqlite3-native nspr-native zlib-native"
-RDEPENDS_${PN} = "perl"
+RDEPENDS_${PN}-smime = "perl"
 
 TD = "${S}/tentative-dist"
 TDS = "${S}/tentative-dist-staging"
@@ -188,6 +189,10 @@ pkg_postinst_${PN} () {
     signlibs.sh
 }
 
+PACKAGES =+ "${PN}-smime"
+FILES_${PN}-smime = "\
+    ${bindir}/smime \
+"
 FILES_${PN} = "\
     ${sysconfdir} \
     ${bindir} \

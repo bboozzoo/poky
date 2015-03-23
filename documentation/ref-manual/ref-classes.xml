@@ -580,8 +580,8 @@
 
     <para>
         The <filename>debian</filename> class renames output packages so that
-        they follow the Debian naming policy (i.e. <filename>eglibc</filename>
-        becomes <filename>libc6</filename> and <filename>eglibc-devel</filename>
+        they follow the Debian naming policy (i.e. <filename>glibc</filename>
+        becomes <filename>libc6</filename> and <filename>glibc-devel</filename>
         becomes <filename>libc6-dev</filename>.)
         Renaming includes the library name and version as part of the package
         name.
@@ -1177,7 +1177,7 @@
         <link linkend='var-ICECC_DISABLED'><filename>ICECC_DISABLED</filename></link>
         variable to "1" as follows:
         <literallayout class='monospaced'>
-     INHERIT_DISTRO += "icecc"
+     INHERIT_DISTRO_append = " icecc"
      ICECC_DISABLED ??= "1"
         </literallayout>
         This practice makes sure everyone is using the same signatures but also
@@ -2160,6 +2160,11 @@
         <link linkend='ref-classes-package_ipk'><filename>package_ipk</filename></link>,
         and
         <link linkend='ref-classes-package_tar'><filename>package_tar</filename></link>.
+        <note><title>Warning</title>
+            The <filename>package_tar</filename> class is broken and not
+            supported.
+            It is recommended that you do not use this class.
+        </note>
     </para>
 
     <para>
@@ -2297,6 +2302,12 @@
 
 <section id='ref-classes-package_tar'>
     <title><filename>package_tar.bbclass</filename></title>
+
+    <note><title>Warning</title>
+        The <filename>package_tar</filename> class is broken and is not
+        supported.
+        It is recommended that you do not use it.
+    </note>
 
     <para>
         The <filename>package_tar</filename>
@@ -2797,7 +2808,7 @@
         file.
         Here is an example:
         <literallayout class='monospaced'>
-    RM_WORK_EXCLUDE += "busybox eglibc"
+    RM_WORK_EXCLUDE += "busybox glibc"
         </literallayout>
     </para>
 </section>

@@ -62,6 +62,9 @@ CACHED_CONFIGUREVARS += "ac_cv_header_bsd_libutil_h=no ac_cv_header_libutil_h=no
 # passwd path is hardcoded in sshd
 CACHED_CONFIGUREVARS += "ac_cv_path_PATH_PASSWD_PROG=${bindir}/passwd"
 
+# We don't want to depend on libblockfile
+CACHED_CONFIGUREVARS += "ac_cv_header_maillock_h=no"
+
 # This is a workaround for uclibc because including stdio.h
 # pulls in pthreads.h and causes conflicts in function prototypes.
 # This results in compilation failure, so unless this is fixed,
@@ -89,6 +92,7 @@ do_install_append () {
 	rmdir ${D}${localstatedir}/run/sshd ${D}${localstatedir}/run ${D}${localstatedir}
 	install -d ${D}/${sysconfdir}/default/volatiles
 	install -m 644 ${WORKDIR}/volatiles.99_sshd ${D}/${sysconfdir}/default/volatiles/99_sshd
+	install -m 0755 ${S}/contrib/ssh-copy-id ${D}${bindir}
 
 	# Create config files for read-only rootfs
 	install -d ${D}${sysconfdir}/ssh

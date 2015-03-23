@@ -374,7 +374,7 @@ buildhistory_get_installed() {
 	printf "" > $1/installed-package-sizes.tmp
 	cat $pkgcache | while read pkg pkgfile pkgarch
 	do
-		size=`oe-pkgdata-util read-value ${PKGDATA_DIR} "PKGSIZE" ${pkg}_${pkgarch}`
+		size=`oe-pkgdata-util -p ${PKGDATA_DIR} read-value "PKGSIZE" ${pkg}_${pkgarch}`
 		if [ "$size" != "" ] ; then
 			echo "$size $pkg" >> $1/installed-package-sizes.tmp
 		fi
@@ -484,8 +484,9 @@ END
 	echo "SDKSIZE = $sdksize" >> ${BUILDHISTORY_DIR_SDK}/sdk-info.txt
 }
 
-# By prepending we get in before the removal of packaging files
-ROOTFS_POSTPROCESS_COMMAND =+ " buildhistory_list_installed_image ;\
+# By using ROOTFS_POSTUNINSTALL_COMMAND we get in after uninstallation of
+# unneeded packages but before the removal of packaging files
+ROOTFS_POSTUNINSTALL_COMMAND += " buildhistory_list_installed_image ;\
                                 buildhistory_get_image_installed ; "
 
 IMAGE_POSTPROCESS_COMMAND += " buildhistory_get_imageinfo ; "

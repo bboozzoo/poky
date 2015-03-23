@@ -13,8 +13,8 @@ common_errors = [
     "usbhid: probe of ",
     "_OSC failed (AE_ERROR)",
     "_OSC failed (AE_SUPPORT)",
-    "AE_ALREADY_EXISTS"
-    "ACPI _OSC request failed (AE_SUPPORT)"
+    "AE_ALREADY_EXISTS",
+    "ACPI _OSC request failed (AE_SUPPORT)",
     "can\'t disable ASPM",
     "Failed to load module \"vesa\"",
     "Failed to load module vesa",
@@ -22,7 +22,11 @@ common_errors = [
     "Failed to load module modesetting",
     "Failed to load module \"glx\"",
     "Failed to load module glx",
-    "[drm] Cannot find any crtc or sizes - going 1024x768"
+    "[drm] Cannot find any crtc or sizes - going 1024x768",
+    "_OSC failed (AE_NOT_FOUND); disabling ASPM",
+    "Open ACPI failed (/var/run/acpid.socket) (No such file or directory)",
+    "NX (Execute Disable) protection cannot be enabled: non-PAE kernel!",
+    "hd.: possibly failed opcode"
     ]
 
 x86_common = [
@@ -34,8 +38,6 @@ x86_common = [
 
 qemux86_common = [
     'Fast TSC calibration', 
-    '_OSC failed (AE_NOT_FOUND); disabling ASPM',
-    'Open ACPI failed (/var/run/acpid.socket) (No such file or directory)',
     'wrong ELF class',
 ] + common_errors
 
@@ -48,6 +50,7 @@ ignore_errors = {
     'qemux86-64' : qemux86_common,
     'qemumips' : [
         'Failed to load module "glx"',
+        'pci 0000:00:00.0: [Firmware Bug]: reg 0x..: invalid BAR (can\'t size)',
         ] + common_errors,
     'qemuppc' : [
         'PCI 0000:00 Cannot reserve Legacy IO [io  0x0000-0x0fff]',

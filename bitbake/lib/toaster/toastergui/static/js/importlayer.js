@@ -136,7 +136,6 @@ function importLayerPageInit (ctx) {
         name: layerNameInput.val(),
         vcs_url: vcsURLInput.val(),
         git_ref: gitRefInput.val(),
-        summary:  $("#layer-summary").val(),
         dir_path: $("#layer-subdir").val(),
         project_id: ctx.projectId,
         layer_deps: layerDepsCsv,
@@ -149,7 +148,6 @@ function importLayerPageInit (ctx) {
           headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
           success: function (data) {
             if (data.error != "ok") {
-              show_error_message(data, layerData);
               console.log(data.error);
             } else {
               /* Success layer import now go to the project page */
@@ -165,59 +163,7 @@ function importLayerPageInit (ctx) {
     }
   });
 
-  function show_error_message(error, layerData) {
-
-    var errorMsg = $("#import-error").fadeIn();
-    var errorType = error.error;
-    var body = errorMsg.children("p");
-    var title = errorMsg.children("h3");
-    var optionsList = errorMsg.children("ul");
-    var invalidLayerRevision = $("#invalid-layer-revision-hint");
-    var layerRevisionCtrl = $("#layer-revision-ctrl");
-
-    /* remove any existing items */
-    optionsList.children().each(function(){ $(this).remove(); });
-    body.text("");
-    title.text("");
-    invalidLayerRevision.hide();
-    layerNameCtrl.removeClass("error");
-    layerRevisionCtrl.removeClass("error");
-
-    switch (errorType){
-      case 'hint-layer-version-exists':
-        title.text("This layer already exists");
-        body.html("A layer <strong>"+layerData.name+"</strong> already exists with this Git repository URL and this revision. You can:");
-        optionsList.append("<li>Import <strong>"+layerData.name+"</strong> with a different revision </li>");
-        optionsList.append("<li>or <a href=\""+ctx.layerDetailsUrl+error.existing_layer_version+"/\" >change the revision of the existing layer</a></li>");
-
-        layerRevisionCtrl.addClass("error");
-
-        invalidLayerRevision.html("A layer <strong>"+layerData.name+"</strong> already exists with this revision.<br />You can import <strong>"+layerData.name+"</strong> with a different revision");
-        invalidLayerRevision.show();
-        break;
-
-      case 'hint-layer-exists-with-different-url':
-        title.text("This layer already exists");
-        body.html("A layer <strong>"+layerData.name+"</strong> already exists with a different Git repository URL:<p style='margin-top:10px;'><strong>"+error.current_url+"</strong></p><p>You can:</p>");
-        optionsList.append("<li>Import the layer under a different name</li>");
-        optionsList.append("<li>or <a href=\""+ctx.layerDetailsUrl+error.current_id+"/\" >change the Git repository URL of the existing layer</a></li>");
-        duplicatedLayerName.html("A layer <strong>"+layerData.name+"</strong> already exists with a different Git repository URL.<br />To import this layer give it a different name.");
-        duplicatedLayerName.show();
-        layerNameCtrl.addClass("error");
-        break;
-
-      case 'hint-layer-exists':
-        title.text("This layer already exists");
-        body.html("A layer <strong>"+layerData.name+"</strong> already exists. You can:");
-        optionsList.append("<li>Import the layer under a different name</li>");
-        break;
-      default:
-        title.text("Error")
-        body.text(data.error);
-    }
-  }
-
-  function enable_import_btn (enabled) {
+  function enable_import_btn(enabled) {
     var importAndAddHint = $("#import-and-add-hint");
 
     if (enabled) {
@@ -245,20 +191,59 @@ function importLayerPageInit (ctx) {
       enable_import_btn(true);
   }
 
-  vcsURLInput.keyup(function() {
+  function layerExistsError(layer){
+    var dupLayerInfo = $("#duplicate-layer-info");
+    dupLayerInfo.find(".dup-layer-name").text(layer.name);
+    dupLayerInfo.find(".dup-layer-link").attr("href", layer.layerdetailurl);
+    dupLayerInfo.find("#dup-layer-vcs-url").text(layer.giturl);
+    dupLayerInfo.find("#dup-layer-revision").text(layer.revision);
+
+    $(".fields-apart-from-layer-name").fadeOut(function(){
+
+      dupLayerInfo.fadeIn();
+    });
+  }
+
+  layerNameInput.on('blur', function() {
+      if (!$(this).val()){
+        return;
+      }
+      var name = $(this).val();
+
+      /* Check if the layer name exists */
+      $.getJSON(ctx.xhrDataTypeaheadUrl, { type : "layers", project_id: ctx.projectId, include_added: "true" , value: name }, function(layer) {
+      if (layer.list.length > 0) {
+        for (var i in layer.list){
+          if (layer.list[i].name == name) {
+            console.log(layer.list[i])
+            layerExistsError(layer.list[i]);
+          }
+        }
+      }
+    });
+  });
+
+  vcsURLInput.on('input', function() {
     check_form();
   });
 
-  gitRefInput.keyup(function() {
+  gitRefInput.on('input', function() {
     check_form();
   });
 
-  layerNameInput.keyup(function() {
+  layerNameInput.on('input', function() {
     if ($(this).val() && !validLayerName.test($(this).val())){
       layerNameCtrl.addClass("error")
       $("#invalid-layer-name-hint").show();
       enable_import_btn(false);
       return;
+    }
+
+    if ($("#duplicate-layer-info").css("display") != "None"){
+      $("#duplicate-layer-info").fadeOut(function(){
+        $(".fields-apart-from-layer-name").show();
+      });
+
     }
 
     /* Don't remove the error class if we're displaying the error for another

@@ -33,8 +33,10 @@ from toaster.orm.models import Task_Dependency, Package_Dependency
 from toaster.orm.models import Recipe_Dependency
 from bb.msg import BBLogFormatter as format
 from django.db import models
+from pprint import pformat
 import logging
 
+from django.db import transaction, connection
 
 logger = logging.getLogger("BitBake")
 
@@ -189,8 +191,8 @@ class ORMWrapper(object):
                     vars(task_object)[v] = task_information[v]
                     object_changed = True
 
-        # update setscene-related information if the task was just created
-        if created and task_object.outcome == Task.OUTCOME_COVERED and 1 == Task.objects.related_setscene(task_object).count():
+        # update setscene-related information if the task has a setscene
+        if task_object.outcome == Task.OUTCOME_COVERED and 1 == task_object.get_related_setscene().count():
             task_object.outcome = Task.OUTCOME_CACHED
             object_changed = True
 
@@ -219,6 +221,9 @@ class ORMWrapper(object):
     def get_update_recipe_object(self, recipe_information, must_exist = False):
         assert 'layer_version' in recipe_information
         assert 'file_path' in recipe_information
+
+        if recipe_information['file_path'].startswith(recipe_information['layer_version'].layer.local_path):
+            recipe_information['file_path'] = recipe_information['file_path'][len(recipe_information['layer_version'].layer.local_path):].lstrip("/")
 
         recipe_object, created = self._cached_get_or_create(Recipe, layer_version=recipe_information['layer_version'],
                                      file_path=recipe_information['file_path'])
@@ -269,15 +274,34 @@ class ORMWrapper(object):
         else:
             # we are under managed mode; we must match the layer used in the Project Layer
             from bldcontrol.models import BuildEnvironment, BuildRequest
-            br, be = brbe.split(":")
+            br_id, be_id = brbe.split(":")
 
-            buildrequest = BuildRequest.objects.get(pk = br)
+            # find layer by checkout path;
+            from bldcontrol import bbcontroller
+            bc = bbcontroller.getBuildEnvironmentController(pk = be_id)
 
             # we might have a race condition here, as the project layers may change between the build trigger and the actual build execution
             # but we can only match on the layer name, so the worst thing can happen is a mis-identification of the layer, not a total failure
-            layer_object = buildrequest.project.projectlayer_set.get(layercommit__layer__name=layer_information['name']).layercommit.layer
 
-            return layer_object
+            # note that this is different
+            buildrequest = BuildRequest.objects.get(pk = br_id)
+            for brl in buildrequest.brlayer_set.all():
+                localdirname = os.path.join(bc.getGitCloneDirectory(brl.giturl, brl.commit), brl.dirpath)
+                # we get a relative path, unless running in HEAD mode where the path is absolute
+                if not localdirname.startswith("/"):
+                    localdirname = os.path.join(bc.be.sourcedir, localdirname)
+                #logger.debug(1, "Localdirname %s lcal_path %s" % (localdirname, layer_information['local_path']))
+                if localdirname.startswith(layer_information['local_path']):
+                    # we matched the BRLayer, but we need the layer_version that generated this BR; reverse of the Project.schedule_build()
+                    #logger.debug(1, "Matched %s to BRlayer %s" % (pformat(layer_information["local_path"]), localdirname))
+                    for pl in buildrequest.project.projectlayer_set.filter(layercommit__layer__name = brl.name):
+                        if pl.layercommit.layer.vcs_url == brl.giturl :
+                            layer = pl.layercommit.layer
+                            layer.local_path = layer_information['local_path']
+                            layer.save()
+                            return layer
+
+            raise NotExisting("Unidentified layer %s" % pformat(layer_information))
 
 
     def save_target_file_information(self, build_obj, target_obj, filedata):
@@ -447,7 +471,7 @@ class ORMWrapper(object):
             Package_Dependency.objects.bulk_create(packagedeps_objs)
 
         if (len(errormsg) > 0):
-            raise Exception(errormsg)
+            logger.warn("buildinfohelper: target_package_info could not identify recipes: \n%s" % errormsg)
 
     def save_target_image_file_information(self, target_obj, file_name, file_size):
         target_image_file = Target_Image_File.objects.create( target = target_obj,
@@ -606,7 +630,11 @@ class BuildInfoHelper(object):
         self.internal_state = {}
         self.internal_state['taskdata'] = {}
         self.task_order = 0
+        self.autocommit_step = 1
         self.server = server
+        # we use manual transactions if the database doesn't autocommit on us
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(False)
         self.orm_wrapper = ORMWrapper()
         self.has_build_history = has_build_history
         self.tmp_dir = self.server.runCommand(["getVariable", "TMPDIR"])[0]
@@ -656,18 +684,44 @@ class BuildInfoHelper(object):
         assert path.startswith("/")
         assert 'build' in self.internal_state
 
-        def _slkey(layer_version):
-            assert isinstance(layer_version, Layer_Version)
-            return len(layer_version.layer.local_path)
+        if self.brbe is None:
+            def _slkey_interactive(layer_version):
+                assert isinstance(layer_version, Layer_Version)
+                return len(layer_version.layer.local_path)
 
-        # Heuristics: we always match recipe to the deepest layer path that
-        # we can match to the recipe file path
-        for bl in sorted(self.orm_wrapper.layer_version_objects, reverse=True, key=_slkey):
-            if (path.startswith(bl.layer.local_path)):
-                return bl
+            # Heuristics: we always match recipe to the deepest layer path in the discovered layers
+            for lvo in sorted(self.orm_wrapper.layer_version_objects, reverse=True, key=_slkey_interactive):
+                # we can match to the recipe file path
+                if path.startswith(lvo.layer.local_path):
+                    return lvo
 
-        #if we get here, we didn't read layers correctly; mockup the new layer
-        unknown_layer, created = Layer.objects.get_or_create(name="unknown", local_path="/", layer_index_url="")
+        else:
+            br_id, be_id = self.brbe.split(":")
+            from bldcontrol.bbcontroller import getBuildEnvironmentController
+            from bldcontrol.models import BuildRequest
+            bc = getBuildEnvironmentController(pk = be_id)
+
+            def _slkey_managed(layer_version):
+                return len(bc.getGitCloneDirectory(layer_version.giturl, layer_version.commit) + layer_version.dirpath)
+
+            # Heuristics: we match the path to where the layers have been checked out
+            for brl in sorted(BuildRequest.objects.get(pk = br_id).brlayer_set.all(), reverse = True, key = _slkey_managed):
+                localdirname = os.path.join(bc.getGitCloneDirectory(brl.giturl, brl.commit), brl.dirpath)
+                # we get a relative path, unless running in HEAD mode where the path is absolute
+                if not localdirname.startswith("/"):
+                    localdirname = os.path.join(bc.be.sourcedir, localdirname)
+                if path.startswith(localdirname):
+                    #logger.warn("-- managed: matched path %s with layer %s " % (path, localdirname))
+                    # we matched the BRLayer, but we need the layer_version that generated this br
+                    for lvo in self.orm_wrapper.layer_version_objects:
+                        if brl.name == lvo.layer.name:
+                            return lvo
+
+        #if we get here, we didn't read layers correctly; dump whatever information we have on the error log
+        logger.error("Could not match layer version for recipe path %s : %s" % (path, self.orm_wrapper.layer_version_objects))
+
+        #mockup the new layer
+        unknown_layer, created = Layer.objects.get_or_create(name="__FIXME__unidentified_layer", local_path="/", layer_index_url="")
         unknown_layer_version_obj, created = Layer_Version.objects.get_or_create(layer = unknown_layer, build = self.internal_state['build'])
 
         return unknown_layer_version_obj
@@ -728,7 +782,10 @@ class BuildInfoHelper(object):
         layerinfos = BuildInfoHelper._get_data_from_event(event)
         self.internal_state['lvs'] = {}
         for layer in layerinfos:
-            self.internal_state['lvs'][self.orm_wrapper.get_update_layer_object(layerinfos[layer], self.brbe)] = layerinfos[layer]['version']
+            try:
+                self.internal_state['lvs'][self.orm_wrapper.get_update_layer_object(layerinfos[layer], self.brbe)] = layerinfos[layer]['version']
+            except NotExisting as nee:
+                logger.warn("buildinfohelper: cannot identify layer exception:%s " % nee)
 
 
     def store_started_build(self, event):
@@ -757,7 +814,7 @@ class BuildInfoHelper(object):
 
         # Save build configuration
         data = self.server.runCommand(["getAllKeysWithFlags", ["doc", "func"]])[0]
-        self.orm_wrapper.save_build_variables(build_obj, [])
+        self.orm_wrapper.save_build_variables(build_obj, data)
 
         return self.brbe
 
@@ -770,7 +827,7 @@ class BuildInfoHelper(object):
             if t.is_image == True:
                 output_files = list(evdata.viewkeys())
                 for output in output_files:
-                    if t.target in output and output.split('.rootfs.')[1] in image_fstypes:
+                    if t.target in output and 'rootfs' in output and not output.endswith(".manifest"):
                         self.orm_wrapper.save_target_image_file_information(t, output, evdata[output])
 
     def update_artifact_image_file(self, event):
@@ -838,9 +895,16 @@ class BuildInfoHelper(object):
             assert localfilepath.startswith("/")
 
             recipe_information = self._get_recipe_information_from_taskfile(taskfile)
-            recipe_object = Recipe.objects.get(layer_version = recipe_information['layer_version'],
+            try:
+                if recipe_information['file_path'].startswith(recipe_information['layer_version'].layer.local_path):
+                    recipe_information['file_path'] = recipe_information['file_path'][len(recipe_information['layer_version'].layer.local_path):].lstrip("/")
+
+                recipe_object = Recipe.objects.get(layer_version = recipe_information['layer_version'],
                             file_path__endswith = recipe_information['file_path'],
                             name = recipename)
+            except Recipe.DoesNotExist:
+                logger.error("Could not find recipe for recipe_information %s name %s" % (pformat(recipe_information), recipename))
+                raise
 
             task_information = {}
             task_information['build'] = self.internal_state['build']
@@ -902,6 +966,13 @@ class BuildInfoHelper(object):
             if isinstance(event, (bb.runqueue.runQueueTaskFailed, bb.runqueue.sceneQueueTaskFailed)):
                 task_information['outcome'] = Task.OUTCOME_FAILED
                 del self.internal_state['taskdata'][identifier]
+
+        if not connection.features.autocommits_when_autocommit_is_off:
+            # we force a sync point here, to get the progress bar to show
+            if self.autocommit_step % 3 == 0:
+                transaction.set_autocommit(True)
+                transaction.set_autocommit(False)
+            self.autocommit_step += 1
 
         self.orm_wrapper.get_update_task_object(task_information, True) # must exist
 
@@ -1073,7 +1144,7 @@ class BuildInfoHelper(object):
         Task_Dependency.objects.bulk_create(taskdeps_objects)
 
         if (len(errormsg) > 0):
-            raise Exception(errormsg)
+            logger.warn("buildinfohelper: dependency info not identify recipes: \n%s" % errormsg)
 
 
     def store_build_package_information(self, event):
@@ -1091,7 +1162,8 @@ class BuildInfoHelper(object):
         be.save()
         br = BuildRequest.objects.get(pk = br_id)
         if errorcode == 0:
-            br.state = BuildRequest.REQ_COMPLETED
+            # request archival of the project artifacts
+            br.state = BuildRequest.REQ_ARCHIVE
         else:
             br.state = BuildRequest.REQ_FAILED
         br.save()
@@ -1135,6 +1207,7 @@ class BuildInfoHelper(object):
             return
 
         if 'build' in self.internal_state and 'backlog' in self.internal_state:
+            # if we have a backlog of events, do our best to save them here
             if len(self.internal_state['backlog']):
                 tempevent = self.internal_state['backlog'].pop()
                 logger.debug(1, "buildinfohelper: Saving stored event %s " % tempevent)
@@ -1164,5 +1237,14 @@ class BuildInfoHelper(object):
             self._store_build_done(errorcode)
 
         if 'backlog' in self.internal_state:
-            for event in self.internal_state['backlog']:
-                   logger.error("Unsaved log: %s", event.msg)
+            if 'build' in self.internal_state:
+                # we save missed events in the database for the current build
+                tempevent = self.internal_state['backlog'].pop()
+                self.store_log_event(tempevent)
+            else:
+                # we have no build, and we still have events; something amazingly wrong happend
+                for event in self.internal_state['backlog']:
+                   logger.error("UNSAVED log: %s", event.msg)
+
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(True)

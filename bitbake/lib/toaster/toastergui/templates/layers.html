@@ -3,7 +3,7 @@
 {% load humanize %}
 
 {% block localbreadcrumb %}
-<li>Layers</li>
+<li>All compatible layers</li>
 {% endblock %}
 
 {% block projectinfomain %}
@@ -14,9 +14,9 @@
   {% elif request.GET.filter and total_count ==  0 or request.GET.search and total_count == 0 %}
       No layers found
   {%else%}
-      All layers
+      All compatible layers
   {%endif%}
-                        <i class="icon-question-sign get-help heading-help" title="This page lists all the layers compatible with {{project.release.name}} that Toaster knows about."></i>
+                        <i class="icon-question-sign get-help heading-help" title="This page lists all the layers compatible with the release selected for this project, which is {{project.release.description}}"></i>
                      </h1>
                 </div>
 
@@ -41,7 +41,6 @@
     <tr class="data">
             <td class="layer"><a href="{% url 'layerdetails' o.id %}">{{o.layer.name}}</a></td>
             <td class="description">{% if o.layer.summary %}{{o.layer.summary}}{%endif%}</td>
-            <td class="source"><a href="{% url 'layerdetails' o.pk %}">{{o.layer_source.name}}</a></td>
             <td class="git-repo"><a href="{% url 'layerdetails' o.pk %}"><code>{{o.layer.vcs_url}}</code></a>
             {% if o.get_vcs_link_url %}
             <a target="_blank" href="{{ o.get_vcs_link_url }}"><i class="icon-share get-info"></i></a>
@@ -53,12 +52,15 @@
                 {% endif %}
         </td>
             <td class="branch">
-                {% if o.branch %}
-                    {{o.branch}}
-                {% else %}
-                    {{o.up_branch.name}}
-                    <i class="icon-question-sign get-help hover-help" title="Your builds will use the tip of the branch you have cloned or downloaded to your computer, so nothing will be fetched"></i>
-                {% endif %}
+                {% with vcs_ref=o.get_vcs_reference %}
+                  {% if vcs_ref|is_shaid %}
+                    <a class="btn" data-content="<ul class='unstyled'> <li>{{vcs_ref}}</li> </ul>">
+                      {{vcs_ref|truncatechars:10}}
+                    </a>
+                  {% else %}
+                    {{vcs_ref}}
+                  {% endif %}
+                {% endwith %}
             </td>
             <td class="dependencies">
         {% with ods=o.dependencies.all%}
@@ -118,6 +120,7 @@
 
 var tooltipUpdateText;
 
+/* ensure csrf cookie exists {% csrf_token %} */
 function _makeXHREditCall(data, onsuccess, onfail) {
     $.ajax( {
         type: "POST",

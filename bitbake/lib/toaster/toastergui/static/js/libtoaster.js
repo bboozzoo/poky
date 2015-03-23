@@ -1,4 +1,4 @@
-
+"use strict";
 /* All shared functionality to go in libtoaster object.
  * This object really just helps readability since we can then have
  * a traceable namespace.
@@ -20,7 +20,7 @@ var libtoaster = (function (){
         source: function(query, process){
           xhrParams.value = query;
           $.getJSON(xhrUrl, this.options.xhrParams, function(data){
-            if (data.error != "ok") {
+            if (data.error !== "ok") {
               console.log("Error getting data from server "+data.error);
               return;
             }
@@ -62,7 +62,7 @@ var libtoaster = (function (){
     }
 
     jQElement.data('typeahead').render = customRenderFunc;
-  };
+  }
 
   /*
    * url - the url of the xhr build */
@@ -80,10 +80,10 @@ var libtoaster = (function (){
         data: data,
         headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
         success: function (_data) {
-          if (_data.error != "ok") {
+          if (_data.error !== "ok") {
             console.warn(_data.error);
           } else {
-            if (onsuccess != undefined) onsuccess(_data);
+            if (onsuccess !== undefined) onsuccess(_data);
           }
         },
         error: function (_data) {
@@ -91,7 +91,34 @@ var libtoaster = (function (){
           console.warn(_data);
           if (onfail) onfail(data);
     } });
-  };
+  }
+
+  /* cancelABuild:
+   * url: xhr_projectbuild
+   * builds_ids: space separated list of build request ids
+   * onsuccess: callback for successful execution
+   * onfail: callback for failed execution
+   */
+  function _cancelABuild(url, build_ids, onsuccess, onfail){
+    $.ajax( {
+        type: "POST",
+        url: url,
+        data: { 'buildCancel': build_ids },
+        headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
+        success: function (_data) {
+          if (_data.error !== "ok") {
+            console.warn(_data.error);
+          } else {
+            if (onsuccess !== undefined) onsuccess(_data);
+          }
+        },
+        error: function (_data) {
+          console.warn("Call failed");
+          console.warn(_data);
+          if (onfail) onfail(data);
+        }
+    });
+  }
 
   /* Get a project's configuration info */
   function _getProjectInfo(url, projectId, onsuccess, onfail){
@@ -101,18 +128,18 @@ var libtoaster = (function (){
         data: { project_id : projectId },
         headers: { 'X-CSRFToken' : $.cookie('csrftoken')},
         success: function (_data) {
-          if (_data.error != "ok") {
+          if (_data.error !== "ok") {
             console.warn(_data.error);
           } else {
-            if (onsuccess != undefined) onsuccess(_data);
+            if (onsuccess !== undefined) onsuccess(_data);
           }
         },
         error: function (_data) {
           console.warn(_data);
-          if (onfail) onfail(data);
+          if (onfail) onfail(_data);
         }
     });
-  };
+  }
 
   /* Properties for data can be:
    * layerDel (csv)
@@ -130,10 +157,10 @@ var libtoaster = (function (){
         success: function (data) {
           if (data.error != "ok") {
             console.log(data.error);
-            if (onFail != undefined)
+            if (onFail !== undefined)
               onFail(data);
           } else {
-            if (onSuccess != undefined)
+            if (onSuccess !== undefined)
               onSuccess(data);
           }
         },
@@ -142,7 +169,7 @@ var libtoaster = (function (){
           console.log(data);
         }
     });
-  };
+  }
 
   function _getLayerDepsForProject(xhrDataTypeaheadUrl, projectId, layerId, onSuccess, onFail){
     /* Check for dependencies not in the current project */
@@ -151,7 +178,7 @@ var libtoaster = (function (){
       function(data) {
         if (data.error != "ok") {
           console.log(data.error);
-          if (onFail != undefined)
+          if (onFail !== undefined)
             onFail(data);
         } else {
           onSuccess(data);
@@ -159,33 +186,69 @@ var libtoaster = (function (){
       }, function() {
         console.log("E: Failed to make request");
     });
-  };
+  }
+
+  /* parses the query string of the current window.location to an object */
+  function _parseUrlParams() {
+    var string = window.location.search;
+    string = string.substr(1);
+    var stringArray = string.split ("&");
+    var obj = {};
+
+    for (var i in stringArray) {
+      var keyVal = stringArray[i].split ("=");
+      obj[keyVal[0]] = keyVal[1];
+    }
+
+    return obj;
+  }
+
+  /* takes a flat object and outputs it as a query string
+   * e.g. the output of dumpsUrlParams
+   */
+  function _dumpsUrlParams(obj) {
+    var str = "?";
+
+    for (var key in obj){
+      if (!obj[key])
+        continue;
+
+      str += key+ "="+obj[key].toString();
+      str += "&";
+    }
+
+    return str;
+  }
+
 
   return {
     reload_params : reload_params,
     startABuild : _startABuild,
+    cancelABuild : _cancelABuild,
     makeTypeahead : _makeTypeahead,
     getProjectInfo: _getProjectInfo,
     getLayerDepsForProject : _getLayerDepsForProject,
     editProject : _editProject,
     debug: false,
-  }
+    parseUrlParams : _parseUrlParams,
+    dumpsUrlParams : _dumpsUrlParams,
+  };
 })();
 
 /* keep this in the global scope for compatability */
 function reload_params(params) {
-    uri = window.location.href;
-    splitlist = uri.split("?");
-    url = splitlist[0], parameters=splitlist[1];
+    var uri = window.location.href;
+    var splitlist = uri.split("?");
+    var url = splitlist[0];
+    var parameters = splitlist[1];
     // deserialize the call parameters
-    if(parameters){
-        cparams = parameters.split("&");
-    }else{
-        cparams = []
-    }
-    nparams = {}
-    for (i = 0; i < cparams.length; i++) {
-        temp = cparams[i].split("=");
+    var cparams = [];
+    if(parameters)
+      cparams = parameters.split("&");
+
+    var nparams = {};
+    for (var i = 0; i < cparams.length; i++) {
+        var temp = cparams[i].split("=");
         nparams[temp[0]] = temp[1];
     }
     // update parameter values
@@ -193,7 +256,7 @@ function reload_params(params) {
         nparams[encodeURIComponent(i)] = encodeURIComponent(params[i]);
     }
     // serialize the structure
-    callparams = []
+    var callparams = [];
     for (i in nparams) {
         callparams.push(i+"="+nparams[i]);
     }
@@ -204,7 +267,7 @@ function reload_params(params) {
 /* Things that happen for all pages */
 $(document).ready(function() {
 
-    /* If we don't have a console object which might be the case in some
+  /* If we don't have a console object which might be the case in some
      * browsers, no-op it to avoid undefined errors.
      */
     if (!window.console) {
@@ -237,7 +300,7 @@ $(document).ready(function() {
     // .btn class applied, and make sure popovers work on click, are mutually
     // exclusive and they close when your click outside their area
 
-    $('html').click(function(e){
+    $('html').click(function(){
         $('td > a.btn').popover('hide');
     });
 
@@ -280,12 +343,18 @@ $(document).ready(function() {
     // initialise the tooltips for the icon-pencil icons
     $(".icon-pencil").tooltip({ container: 'body', html: true, delay: {show: 400}, title: "Change" });
 
+    // initialise the tooltips for the download icons
+    $(".icon-download-alt").tooltip({ container: 'body', html: true, delay: { show: 200 } });
+
+    // initialise popover for debug information
+    $(".icon-info-sign").popover( { placement: 'bottom', html: true, container: 'body' });
+
     // linking directly to tabs
     $(function(){
           var hash = window.location.hash;
-          hash && $('ul.nav a[href="' + hash + '"]').tab('show');
+          $('ul.nav a[href="' + hash + '"]').tab('show');
 
-          $('.nav-tabs a').click(function (e) {
+          $('.nav-tabs a').click(function () {
             $(this).tab('show');
             $('body').scrollTop();
           });

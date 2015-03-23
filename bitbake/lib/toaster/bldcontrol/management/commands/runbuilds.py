@@ -1,8 +1,8 @@
 from django.core.management.base import NoArgsCommand, CommandError
 from django.db import transaction
-from orm.models import Build
+from orm.models import Build, ToasterSetting
 from bldcontrol.bbcontroller import getBuildEnvironmentController, ShellCmdException, BuildSetupException
-from bldcontrol.models import BuildRequest, BuildEnvironment, BRError
+from bldcontrol.models import BuildRequest, BuildEnvironment, BRError, BRVariable
 import os
 import logging
 
@@ -47,16 +47,20 @@ class Command(NoArgsCommand):
                 return
 
             logger.debug("runbuilds: starting build %s, environment %s" % (br, bec.be))
+
+            # write the build identification variable
+            BRVariable.objects.create(req = br, name="TOASTER_BRBE", value="%d:%d" % (br.pk, bec.be.pk))
             # let the build request know where it is being executed
             br.environment = bec.be
             br.save()
 
             # set up the buid environment with the needed layers
             bec.setLayers(br.brbitbake_set.all(), br.brlayer_set.all())
-            bec.writePreConfFile(br.brvariable_set.all())
+            bec.writeConfFile("conf/toaster-pre.conf", br.brvariable_set.all())
+            bec.writeConfFile("conf/toaster.conf", raw = "INHERIT+=\"toaster buildhistory\"")
 
             # get the bb server running with the build req id and build env id
-            bbctrl = bec.getBBController("%d:%d" % (br.pk, bec.be.pk))
+            bbctrl = bec.getBBController()
 
             # trigger the build command
             task = reduce(lambda x, y: x if len(y)== 0 else y, map(lambda y: y.task, br.brtarget_set.all()))
@@ -64,7 +68,7 @@ class Command(NoArgsCommand):
                 task = None
             bbctrl.build(list(map(lambda x:x.target, br.brtarget_set.all())), task)
 
-            logger.debug("runbuilds: Build launched, exiting")
+            logger.debug("runbuilds: Build launched, exiting. Follow build logs at %s/toaster_ui.log" % bec.be.builddir)
             # disconnect from the server
             bbctrl.disconnect()
 
@@ -74,16 +78,48 @@ class Command(NoArgsCommand):
         except Exception as e:
             logger.error("runbuilds: Error executing shell command %s" % e)
             traceback.print_exc(e)
+            if "[Errno 111] Connection refused" in str(e):
+                # Connection refused, read toaster_server.out
+                errmsg = bec.readServerLogFile()
+            else:
+                errmsg = str(e)
+
             BRError.objects.create(req = br,
-                errtype = str(type(e)),
-                errmsg = str(e),
-                traceback = traceback.format_exc(e))
+                    errtype = str(type(e)),
+                    errmsg = errmsg,
+                    traceback = traceback.format_exc(e))
             br.state = BuildRequest.REQ_FAILED
             br.save()
             bec.be.lock = BuildEnvironment.LOCK_FREE
             bec.be.save()
 
+    def archive(self):
+        ''' archives data from the builds '''
+        artifact_storage_dir = ToasterSetting.objects.get(name="ARTIFACTS_STORAGE_DIR").value
+        for br in BuildRequest.objects.filter(state = BuildRequest.REQ_ARCHIVE):
+            # save cooker log
+            if br.build == None:
+                br.state = BuildRequest.REQ_FAILED
+                br.save()
+                continue
+            build_artifact_storage_dir = os.path.join(artifact_storage_dir, "%d" % br.build.pk)
+            try:
+                os.makedirs(build_artifact_storage_dir)
+            except OSError as ose:
+                if "File exists" in str(ose):
+                    pass
+                else:
+                    raise ose
 
+            file_name = os.path.join(build_artifact_storage_dir, "cooker_log.txt")
+            try:
+                with open(file_name, "w") as f:
+                    f.write(br.environment.get_artifact(br.build.cooker_log_path).read())
+            except IOError:
+                os.unlink(file_name)
+
+            br.state = BuildRequest.REQ_COMPLETED
+            br.save()
 
     def cleanup(self):
         from django.utils import timezone
@@ -94,4 +130,5 @@ class Command(NoArgsCommand):
 
     def handle_noargs(self, **options):
         self.cleanup()
+        self.archive()
         self.schedule()

@@ -19,6 +19,8 @@
 from django.conf.urls import patterns, include, url
 from django.views.generic import RedirectView
 
+from django.http import HttpResponseBadRequest
+
 urlpatterns = patterns('toastergui.views',
         # landing page
         url(r'^landing/$', 'landing', name='landing'),
@@ -32,7 +34,9 @@ urlpatterns = patterns('toastergui.views',
         url(r'^build/(?P<build_id>\d+)/task/(?P<task_id>\d+)$', 'task', name='task'),
 
         url(r'^build/(?P<build_id>\d+)/recipes/$', 'recipes', name='recipes'),
+        url(r'^build/(?P<build_id>\d+)/recipe/(?P<recipe_id>\d+)/active_tab/(?P<active_tab>\d{1})$', 'recipe', name='recipe'),
         url(r'^build/(?P<build_id>\d+)/recipe/(?P<recipe_id>\d+)$', 'recipe', name='recipe'),
+        url(r'^build/(?P<build_id>\d+)/recipe_packages/(?P<recipe_id>\d+)$', 'recipe_packages', name='recipe_packages'),
 
         url(r'^build/(?P<build_id>\d+)/packages/$', 'bpackage', name='packages'),
         url(r'^build/(?P<build_id>\d+)/package/(?P<package_id>\d+)$', 'package_built_detail',
@@ -51,7 +55,7 @@ urlpatterns = patterns('toastergui.views',
         url(r'^build/(?P<build_id>\d+)/target/(?P<target_id>\d+)/targetpkg$', 'targetpkg', name='targetpkg'),
         url(r'^dentries/build/(?P<build_id>\d+)/target/(?P<target_id>\d+)$', 'dirinfo_ajax', name='dirinfo_ajax'),
         url(r'^build/(?P<build_id>\d+)/target/(?P<target_id>\d+)/dirinfo$', 'dirinfo', name='dirinfo'),
-        url(r'^build/(?P<build_id>\d+)/target/(?P<target_id>\d+)/dirinfo_filepath/(?P<file_path>(?:/[^/\n]+)*)$', 'dirinfo', name='dirinfo_filepath'),
+        url(r'^build/(?P<build_id>\d+)/target/(?P<target_id>\d+)/dirinfo_filepath/_(?P<file_path>(?:/[^/\n]+)*)$', 'dirinfo', name='dirinfo_filepath'),
         url(r'^build/(?P<build_id>\d+)/target/(?P<target_id>\d+)/packages$', 'tpackage', name='targetpackages'),
         url(r'^build/(?P<build_id>\d+)/configuration$', 'configuration', name='configuration'),
         url(r'^build/(?P<build_id>\d+)/configvars$', 'configvars', name='configvars'),
@@ -76,13 +80,13 @@ urlpatterns = patterns('toastergui.views',
 
         url(r'^layers/$', 'layers', name='layers'),
         url(r'^layer/(?P<layerid>\d+)/$', 'layerdetails', name='layerdetails'),
-        url(r'^layer/$', 'layerdetails', name='layerdetails'),
-        url(r'^targets/$', 'targets', name='targets'),
+        url(r'^layer/$', lambda x: HttpResponseBadRequest(), name='base_layerdetails'),
+        url(r'^targets/$', 'targets', name='all-targets'),
         url(r'^machines/$', 'machines', name='machines'),
 
         url(r'^projects/$', 'projects', name='all-projects'),
 
-        url(r'^project/$', 'project', name='project'),
+        url(r'^project/$', lambda x: HttpResponseBadRequest(), name='base_project'),
         url(r'^project/(?P<pid>\d+)/$', 'project', name='project'),
         url(r'^project/(?P<pid>\d+)/configuration$', 'projectconf', name='projectconf'),
         url(r'^project/(?P<pid>\d+)/builds$', 'projectbuilds', name='projectbuilds'),
@@ -91,10 +95,14 @@ urlpatterns = patterns('toastergui.views',
         url(r'^xhr_projectbuild/(?P<pid>\d+)/$', 'xhr_projectbuild', name='xhr_projectbuild'),
         url(r'^xhr_projectinfo/$', 'xhr_projectinfo', name='xhr_projectinfo'),
         url(r'^xhr_projectedit/(?P<pid>\d+)/$', 'xhr_projectedit', name='xhr_projectedit'),
+        url(r'^xhr_configvaredit/(?P<pid>\d+)/$', 'xhr_configvaredit', name='xhr_configvaredit'),
 
         url(r'^xhr_datatypeahead/$', 'xhr_datatypeahead', name='xhr_datatypeahead'),
         url(r'^xhr_importlayer/$', 'xhr_importlayer', name='xhr_importlayer'),
+        url(r'^xhr_updatelayer/$', 'xhr_updatelayer', name='xhr_updatelayer'),
 
+        # dashboard for failed build requests
+        url(r'^project/(?P<pid>\d+)/buildrequest/(?P<brid>\d+)$', 'buildrequestdetails', name='buildrequestdetails'),
 
         # default redirection
         url(r'^$', RedirectView.as_view( url= 'landing')),

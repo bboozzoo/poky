@@ -3,7 +3,7 @@
 {% load humanize %}
 
 {% block localbreadcrumb %}
-<li>Targets</li>
+<li>All compatible targets</li>
 {% endblock %}
 
 {% block projectinfomain %}
@@ -14,9 +14,9 @@
   {% elif request.GET.filter and objects.paginator.count ==  0 or request.GET.search and objects.paginator.count == 0 %}
       No targets found
   {%else%}
-      All targets
+      All compatible targets
   {%endif%}
-                        <i class="icon-question-sign get-help heading-help" title="This page lists all the targets compatible with " + {{project.release.name}} + " that Toaster knows about."></i>
+                        <i class="icon-question-sign get-help heading-help" title="This page lists all the targets compatible with the release selected for this project, which is {{project.release.description}}"></i>
                      </h1>
                 </div>
 
@@ -25,6 +25,7 @@
   </div>
 
 {% if objects.paginator.count == 0 %}
+  {% if request.GET.filter or request.GET.search %}
   <div class="row-fluid">
       <div class="alert">
         <form class="no-results input-append" id="searchform">
@@ -34,12 +35,22 @@
         </form>
       </div>
   </div>
+  {% else %}
+    <div class="alert alert-info">
+      <p class="lead">
+       Toaster has not target information. To generate target information you can:<br/>
+       <ul class="lead">
+       <li style="margin-top: 10px"> <a href="https://wiki.yoctoproject.org/wiki/Setting_up_a_hosted_managed_mode_for_Toaster#LayerSources">Configure a layer source</a></li>
+       <li style="margin-top: 10px">  <a href="{% url 'importlayer' %}">Import a layer</a></li>
+       </ul>
+      </p>
+    </div>
+  {% endif %}
 
 {% else %}
 
 {% include "basetable_top.html" %}
     {% for o in objects %}
-    {% if o.name %}
     <tr class="data">
         <td class="target">
                 {{o.name}}
@@ -49,15 +60,14 @@
         <td class="description">{% if o.description %}{{o.description}}{% else %}{{o.summary}}{%endif%}</td>
         <td class="recipe-file">
                 <code>{{o.file_path}}</code>
-                <a href="{{o.get_vcs_link_url}}{{o.file_path}}" target="_blank"><i class="icon-share get-info"></i></a>
+                <a href="{{o.vcs_link_url}}" target="_blank"><i class="icon-share get-info"></i></a>
         </td>
         <td class="target-section">{{o.section}}</td>
         <td class="license">{{o.license}}</td>
-        <td class="layer"><a href="{% url 'layerdetails' o.layer_version.id%}">{{o.layer_version.layer.name}}</a></td>
-        <td class="source">{{o.layer_source.name}}</td>
+        <td class="layer"><a href="{% url 'layerdetails' o.preffered_layerversion.id%}">{{o.preffered_layerversion.layer.name}}</a></td>
         <td class="branch">
-        {% if o.layer_version.up_branch %}
-            {{o.layer_version.up_branch.name}}
+        {% if o.preffered_layerversion.up_branch %}
+            {{o.preffered_layerversion.up_branch.name}}
         {% else %}
         <a class="btn"
                 data-content="<ul class='unstyled'>
@@ -67,19 +77,18 @@
             </a>
             {% endif %}
         </td>
-        <td class="add-layer" value="{{o.pk}}" layerversion_id="{{o.layer_version.pk}}">
+        <td class="add-layer" value="{{o.pk}}" layerversion_id="{{o.preffered_layerversion.pk}}">
             <div id="layer-tooltip-{{o.pk}}" style="display: none; font-size: 11px; line-height: 1.3;" class="tooltip-inner">layer was modified</div>
             <a href="{% url 'project' project.id %}#/targetbuild={{o.name}}" id="target-build-{{o.pk}}" class="btn btn-block remove-layer" style="display:none;" >
                 Build target
             </a>
-            <a id="layer-add-{{o.pk}}" class="btn btn-block" style="display:none;" href="javascript:layerAdd({{o.layer_version.pk}}, '{{o.layer_version.layer.name}}', '{%url 'layerdetails' o.layer_version.pk%}', {{o.pk}})" >
+            <a id="layer-add-{{o.pk}}" class="btn btn-block" style="display:none;" href="javascript:layerAdd({{o.preffered_layerversion.pk}}, '{{o.preffered_layerversion.layer.name}}', '{%url 'layerdetails' o.preffered_layerversion.pk%}', {{o.pk}})" >
                 <i class="icon-plus"></i>
                 Add layer
-                <i title="" class="icon-question-sign get-help" data-original-title="To build this target, you must first add the {{o.layer_version.layer.name}} layer to your project"></i>
+                <i title="" class="icon-question-sign get-help" data-original-title="To build this target, you must first add the {{o.preffered_layerversion.layer.name}} layer to your project"></i>
             </a>
         </td>
     </tr>
-    {% endif %}
     {% endfor %}
 {% include "basetable_bottom.html" %}
 
@@ -111,6 +120,7 @@
 
 var tooltipUpdateText;
 
+/* ensure csrf cookie exists {% csrf_token %} */
 function _makeXHREditCall(data, onsuccess, onfail) {
     $.ajax( {
         type: "POST",

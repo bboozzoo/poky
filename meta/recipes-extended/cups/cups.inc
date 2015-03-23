@@ -10,7 +10,6 @@ SRC_URI = "http://www.cups.org/software/${PV}/${BP}-source.tar.bz2 \
            file://cups.socket \
            file://cups.path \
            file://cups.service \
-           file://0001-test-ippserver.c-check-avahi-before-use.patch \
 	  "
 
 LEAD_SONAME = "libcupsdriver.so"
@@ -71,7 +70,7 @@ do_compile () {
 		   "-I."
 }
 
-fakeroot do_install () {
+do_install () {
 	oe_runmake "DSTROOT=${D}" install
 
 	# Remove /var/run from package as cupsd will populate it on startup

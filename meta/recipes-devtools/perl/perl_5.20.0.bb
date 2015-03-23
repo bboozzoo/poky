@@ -1,7 +1,7 @@
 SUMMARY = "Perl scripting language"
 HOMEPAGE = "http://www.perl.org/"
 SECTION = "devel"
-LICENSE = "Artistic-1.0 | GPL-1.0"
+LICENSE = "Artistic-1.0 | GPL-1.0+"
 LIC_FILES_CHKSUM = "file://Copying;md5=5b122a36d0f6dc55279a0ebc69f3c60b \
 		    file://Artistic;md5=2e6fd2475335af892494fe1f7327baf3"
 # We need gnugrep (for -I)
@@ -63,6 +63,7 @@ SRC_URI += " \
 	file://fix_bad_rpath.patch \
 	file://perl-archlib-exp.patch \
 	file://dynaloaderhack.patch \
+	file://fix-FF_MORE-crash.patch \
 	\
         \
         file://config.sh \

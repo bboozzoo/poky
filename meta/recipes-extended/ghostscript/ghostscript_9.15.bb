@@ -24,6 +24,7 @@ SRC_URI = "${SRC_URI_BASE} \
            file://objarch.h \
            file://ghostscript-9.02-parallel-make.patch \
            file://cups-no-gcrypt.patch \
+           file://ghostscript-9.15-parallel-make.patch \
            "
 
 SRC_URI_class-native = "${SRC_URI_BASE} \
@@ -33,6 +34,8 @@ SRC_URI_class-native = "${SRC_URI_BASE} \
 
 SRC_URI[md5sum] = "5a78ab0990ff6ec3a103576bc8777c46"
 SRC_URI[sha256sum] = "27f11e4fe5b89857ae745687281d1e4daf9681edc858a3f7e8e77ef09609777a"
+
+PR = "r1"
 
 EXTRA_OECONF = "--without-x --with-system-libtiff --without-jbig2dec \
                 --with-fontpath=${datadir}/fonts \
@@ -58,7 +61,7 @@ EXTRA_OECONF_class-native = "--without-x --with-system-libtiff=no \
 CFLAGS += "-DHAVE_SYS_TIME_H=1"
 BUILD_CFLAGS += "-DHAVE_SYS_TIME_H=1"
 
-inherit autotools-brokensep
+inherit autotools
 
 do_configure_prepend () {
 	mkdir -p obj
@@ -80,8 +83,8 @@ do_configure_append () {
 
 do_install_append () {
     mkdir -p ${D}${datadir}/ghostscript/${PV}/
-    cp -r Resource ${D}${datadir}/ghostscript/${PV}/
-    cp -r iccprofiles ${D}${datadir}/ghostscript/${PV}/
+    cp -r ${S}/Resource ${D}${datadir}/ghostscript/${PV}/
+    cp -r ${S}/iccprofiles ${D}${datadir}/ghostscript/${PV}/
 }
 
 do_compile_class-native () {
@@ -99,8 +102,3 @@ do_install_class-native () {
 }
 
 BBCLASSEXTEND = "native"
-
-# Ghostscript install tool 'instcopy' tries to remove already created
-# directories during install and parallel make causes problems.
-PARALLEL_MAKEINST=""
-

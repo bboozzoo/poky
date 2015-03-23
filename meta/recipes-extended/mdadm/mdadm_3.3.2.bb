@@ -11,6 +11,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263 \
 SRC_URI = "${KERNELORG_MIRROR}/linux/utils/raid/mdadm/${BPN}-${PV}.tar.xz \
            file://mdadm-3.2.2_fix_for_x32.patch \
            file://gcc-4.9.patch \
+           file://mdadm-3.3.2_x32_abi_time_t.patch \
 	  "
 
 SRC_URI[md5sum] = "44698d351501cac6a89072dc877eb220"
@@ -32,6 +33,7 @@ EXTRA_OEMAKE = "CHECK_RUN_DIR=0"
 # int-ll64.h included
 EXTRA_OEMAKE_append_powerpc64 = ' CFLAGS=-D__SANE_USERSPACE_TYPES__'
 EXTRA_OEMAKE_append_mips64 = ' CFLAGS=-D__SANE_USERSPACE_TYPES__'
+EXTRA_OEMAKE_append_mips64n32 = ' CFLAGS=-D__SANE_USERSPACE_TYPES__'
 
 do_compile() {
 	oe_runmake

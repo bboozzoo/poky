@@ -52,7 +52,7 @@ class ToasterSetting(models.Model):
     value = models.CharField(max_length=255)
 
     def __unicode__(self):
-        return "Setting %s" % self.name
+        return "Setting %s = " % (self.name, self.value)
 
 class ProjectManager(models.Manager):
     def create_project(self, name, release):
@@ -67,10 +67,14 @@ class ProjectManager(models.Manager):
 
 
         for rdl in release.releasedefaultlayer_set.all():
-            lv = Layer_Version.objects.filter(layer__name = rdl.layer_name, up_branch__name = release.branch_name)[0].get_equivalents_wpriority(prj)[0]
-            ProjectLayer.objects.create( project = prj,
+            try:
+                lv =Layer_Version.objects.filter(layer__name = rdl.layer_name, up_branch__name = release.branch_name)[0].get_equivalents_wpriority(prj)[0]
+                ProjectLayer.objects.create( project = prj,
                         layercommit = lv,
                         optional = False )
+            except IndexError:
+                # we may have no valid layer version objects, and that's ok
+                pass
 
         return prj
 
@@ -96,14 +100,77 @@ class Project(models.Model):
     objects     = ProjectManager()
 
     def __unicode__(self):
-        return "%s (%s, %s)" % (self.name, self.release, self.bitbake_version)
+        return "%s (Release %s, BBV %s)" % (self.name, self.release, self.bitbake_version)
+
+    def get_current_machine_name(self):
+        try:
+            return self.projectvariable_set.get(name="MACHINE").value
+        except (ProjectVariable.DoesNotExist,IndexError):
+            return( "None" );
+
+    def get_number_of_builds(self):
+        try:
+            return len(Build.objects.filter( project = self.id ))
+        except (Build.DoesNotExist,IndexError):
+            return( 0 )
+
+    def get_last_build_id(self):
+        try:
+            return Build.objects.filter( project = self.id ).order_by('-completed_on')[0].id
+        except (Build.DoesNotExist,IndexError):
+            return( -1 )
+
+    def get_last_outcome(self):
+        build_id = self.get_last_build_id
+        if (-1 == build_id):
+            return( "" )
+        try:
+            return Build.objects.filter( id = self.get_last_build_id )[ 0 ].outcome
+        except (Build.DoesNotExist,IndexError):
+            return( "not_found" )
+
+    def get_last_target(self):
+        build_id = self.get_last_build_id
+        if (-1 == build_id):
+            return( "" )
+        try:
+            return Target.objects.filter(build = build_id)[0].target
+        except (Target.DoesNotExist,IndexError):
+            return( "not_found" )
+
+    def get_last_errors(self):
+        build_id = self.get_last_build_id
+        if (-1 == build_id):
+            return( 0 )
+        try:
+            return Build.objects.filter(id = build_id)[ 0 ].errors_no
+        except (Build.DoesNotExist,IndexError):
+            return( "not_found" )
+
+    def get_last_warnings(self):
+        build_id = self.get_last_build_id
+        if (-1 == build_id):
+            return( 0 )
+        try:
+            return Build.objects.filter(id = build_id)[ 0 ].warnings_no
+        except (Build.DoesNotExist,IndexError):
+            return( "not_found" )
+
+    def get_last_imgfiles(self):
+        build_id = self.get_last_build_id
+        if (-1 == build_id):
+            return( "" )
+        try:
+            return Variable.objects.filter(build = build_id, variable_name = "IMAGE_FSTYPES")[ 0 ].variable_value
+        except (Variable.DoesNotExist,IndexError):
+            return( "not_found" )
 
     # returns a queryset of compatible layers for a project
     def compatible_layerversions(self, release = None, layer_name = None):
         if release == None:
             release = self.release
         # layers on the same branch or layers specifically set for this project
-        queryset = Layer_Version.objects.filter((Q(up_branch__name = release.branch_name) & Q(project = None)) | Q(project = self))
+        queryset = Layer_Version.objects.filter((Q(up_branch__name = release.branch_name) & Q(project = None)) | Q(project = self) | Q(build__project = self))
         if layer_name is not None:
             # we select only a layer name
             queryset = queryset.filter(layer__name = layer_name)
@@ -115,7 +182,7 @@ class Project(models.Model):
 
     # returns a set of layer-equivalent set of layers already in project
     def projectlayer_equivalent_set(self):
-        return [j for i in [x.layercommit.get_equivalents_wpriority(self) for x in self.projectlayer_set.all()] for j in i]
+        return [j for i in [x.layercommit.get_equivalents_wpriority(self) for x in self.projectlayer_set.all().select_related("up_branch")] for j in i]
 
     def schedule_build(self):
         from bldcontrol.models import BuildRequest, BRTarget, BRLayer, BRVariable, BRBitbake
@@ -128,14 +195,8 @@ class Project(models.Model):
                 dirpath = self.bitbake_version.dirpath)
 
             for l in self.projectlayer_set.all().order_by("pk"):
-                commit = l.layercommit.commit
-                print("ii Building layer ", l.layercommit.layer.name, " at commit ", commit)
-                if l.layercommit.up_branch:
-                    commit = l.layercommit.up_branch.name
-                    print("ii Building layer ", l.layercommit.layer.name, " at upbranch ", commit)
-                if l.layercommit.branch:
-                    commit = l.layercommit.branch
-                    print("ii Building layer ", l.layercommit.layer.name, " at actual_branch ", commit)
+                commit = l.layercommit.get_vcs_reference()
+                print("ii Building layer ", l.layercommit.layer.name, " at vcs point ", commit)
                 BRLayer.objects.create(req = br, name = l.layercommit.layer.name, giturl = l.layercommit.layer.vcs_url, commit = commit, dirpath = l.layercommit.dirpath)
             for t in self.projecttarget_set.all():
                 BRTarget.objects.create(req = br, target = t.target, task = t.task)
@@ -190,7 +251,7 @@ class Build(models.Model):
         eta = timezone.now()
         completeper = self.completeper()
         if self.completeper() > 0:
-            eta = timezone.now() + ((timezone.now() - self.started_on)*(100-completeper)/completeper)
+            eta += ((eta - self.started_on)*(100-completeper))/completeper
         return eta
 
 
@@ -277,10 +338,6 @@ class Target_File(models.Model):
     sym_target = models.ForeignKey('Target_File', related_name="symlink_set", null=True)
 
 
-class TaskManager(models.Manager):
-    def related_setscene(self, task_object):
-        return Task.objects.filter(task_executed=True, build = task_object.build, recipe = task_object.recipe, task_name=task_object.task_name+"_setscene")
-
 class Task(models.Model):
 
     SSTATE_NA = 0
@@ -335,10 +392,8 @@ class Task(models.Model):
 
     search_allowed_fields = [ "recipe__name", "recipe__version", "task_name", "logfile" ]
 
-    objects = TaskManager()
-
     def get_related_setscene(self):
-        return Task.objects.related_setscene(self)
+        return Task.objects.filter(task_executed=True, build = self.build, recipe = self.recipe, task_name=self.task_name+"_setscene")
 
     def get_outcome_text(self):
         return Task.TASK_OUTCOME[self.outcome + 1][1]
@@ -358,11 +413,14 @@ class Task(models.Model):
         return "Not Executed"
 
     def get_description(self):
-        helptext = HelpText.objects.filter(key=self.task_name, area=HelpText.VARIABLE, build=self.build)
+        if '_helptext' in vars(self) and self._helptext != None:
+            return self._helptext
         try:
-            return helptext[0].text
-        except IndexError:
-            return ''
+            self._helptext = HelpText.objects.get(key=self.task_name, area=HelpText.VARIABLE, build=self.build).text
+        except HelpText.DoesNotExist:
+            self._helptext = None
+
+        return self._helptext
 
     build = models.ForeignKey(Build, related_name='task_build')
     order = models.IntegerField(null=True)
@@ -370,7 +428,7 @@ class Task(models.Model):
     outcome = models.IntegerField(choices=TASK_OUTCOME, default=OUTCOME_NA)
     sstate_checksum = models.CharField(max_length=100, blank=True)
     path_to_sstate_obj = models.FilePathField(max_length=500, blank=True)
-    recipe = models.ForeignKey('Recipe', related_name='build_recipe')
+    recipe = models.ForeignKey('Recipe', related_name='tasks')
     task_name = models.CharField(max_length=100)
     source_url = models.FilePathField(max_length=255, blank=True)
     work_directory = models.FilePathField(max_length=255, blank=True)
@@ -385,6 +443,9 @@ class Task(models.Model):
 
     outcome_text = property(get_outcome_text)
     sstate_text  = property(get_sstate_text)
+
+    def __unicode__(self):
+        return "%d(%d) %s:%s" % (self.pk, self.build.pk, self.recipe.name, self.task_name)
 
     class Meta:
         ordering = ('order', 'recipe' ,)
@@ -467,7 +528,7 @@ class Package_File(models.Model):
     size = models.IntegerField()
 
 class Recipe(models.Model):
-    search_allowed_fields = ['name', 'version', 'file_path', 'section', 'description', 'license', 'layer_version__layer__name', 'layer_version__branch', 'layer_version__commit', 'layer_version__layer__local_path', 'layer_version__layer_source__name']
+    search_allowed_fields = ['name', 'version', 'file_path', 'section', 'summary', 'description', 'license', 'layer_version__layer__name', 'layer_version__branch', 'layer_version__commit', 'layer_version__layer__local_path', 'layer_version__layer_source__name']
 
     layer_source = models.ForeignKey('LayerSource', default = None, null = True)  # from where did we get this recipe
     up_id = models.IntegerField(null = True, default = None)                    # id of entry in the source
@@ -483,11 +544,6 @@ class Recipe(models.Model):
     homepage = models.URLField(blank=True)
     bugtracker = models.URLField(blank=True)
     file_path = models.FilePathField(max_length=255)
-
-    def get_vcs_link_url(self):
-        if self.layer_version.layer.vcs_web_file_base_url is None:
-            return ""
-        return self.layer_version.layer.vcs_web_file_base_url.replace('%path%', self.file_path).replace('%branch%', self.layer_version.up_branch.name)
 
     def get_layersource_view_url(self):
         if self.layer_source is None:
@@ -529,7 +585,7 @@ class Recipe_Dependency(models.Model):
 
 
 class Machine(models.Model):
-    search_allowed_fields = ["name", "description"]
+    search_allowed_fields = ["name", "description", "layer_version__layer__name"]
     layer_source = models.ForeignKey('LayerSource', default = None, null = True)  # from where did we get this machine
     up_id = models.IntegerField(null = True, default = None)                      # id of entry in the source
     up_date = models.DateTimeField(null = True, default = None)
@@ -537,6 +593,11 @@ class Machine(models.Model):
     layer_version = models.ForeignKey('Layer_Version')
     name = models.CharField(max_length=255)
     description = models.CharField(max_length=255)
+
+    def get_vcs_machine_file_link_url(self):
+        path = 'conf/machine/'+self.name+'.conf'
+
+        return self.layer_version.get_vcs_file_link_url(path)
 
     def __unicode__(self):
         return "Machine " + self.name + "(" + self.description + ")"
@@ -642,8 +703,6 @@ class LayerIndexLayerSource(LayerSource):
         self.sourcetype = LayerSource.TYPE_LAYERINDEX
 
     def get_object_view(self, branch, objectype, upid):
-        if self != branch.layer_source:
-            raise Exception("Invalid branch specification")
         return self.apiurl + "../branch/" + branch.name + "/" + objectype + "/?q=" + str(upid)
 
     def update(self):
@@ -652,6 +711,7 @@ class LayerIndexLayerSource(LayerSource):
         """
         assert self.apiurl is not None
         from django.db import IntegrityError
+        from django.db import transaction, connection
 
         import httplib, urlparse, json
         import os
@@ -703,6 +763,7 @@ class LayerIndexLayerSource(LayerSource):
         # update branches; only those that we already have names listed in the Releases table
         whitelist_branch_names = map(lambda x: x.branch_name, Release.objects.all())
 
+        print "Fetching branches"
         branches_info = _get_json_response(apilinks['branches']
             + "?filter=name:%s" % "OR".join(whitelist_branch_names))
         for bi in branches_info:
@@ -715,6 +776,8 @@ class LayerIndexLayerSource(LayerSource):
 
         # update layers
         layers_info = _get_json_response(apilinks['layerItems'])
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(False)
         for li in layers_info:
             l, created = Layer.objects.get_or_create(layer_source = self, name = li['name'])
             l.up_id = li['id']
@@ -726,11 +789,17 @@ class LayerIndexLayerSource(LayerSource):
             l.summary = li['summary']
             l.description = li['description']
             l.save()
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(True)
 
         # update layerbranches/layer_versions
+        print "Fetching layer information"
         layerbranches_info = _get_json_response(apilinks['layerBranches']
                 + "?filter=branch:%s" % "OR".join(map(lambda x: str(x.up_id), [i for i in Branch.objects.filter(layer_source = self) if i.up_id is not None] ))
             )
+
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(False)
         for lbi in layerbranches_info:
             lv, created = Layer_Version.objects.get_or_create(layer_source = self,
                     up_id = lbi['id'],
@@ -743,10 +812,14 @@ class LayerIndexLayerSource(LayerSource):
             lv.commit = lbi['actual_branch']
             lv.dirpath = lbi['vcs_subdir']
             lv.save()
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(True)
 
         # update layer dependencies
         layerdependencies_info = _get_json_response(apilinks['layerDependencies'])
         dependlist = {}
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(False)
         for ldi in layerdependencies_info:
             try:
                 lv = Layer_Version.objects.get(layer_source = self, up_id = ldi['layerbranch'])
@@ -765,12 +838,18 @@ class LayerIndexLayerSource(LayerSource):
             LayerVersionDependency.objects.filter(layer_version = lv).delete()
             for lvd in dependlist[lv]:
                 LayerVersionDependency.objects.get_or_create(layer_version = lv, depends_on = lvd)
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(True)
 
 
         # update machines
+        print "Fetching machine information"
         machines_info = _get_json_response(apilinks['machines']
                 + "?filter=layerbranch:%s" % "OR".join(map(lambda x: str(x.up_id), Layer_Version.objects.filter(layer_source = self)))
             )
+
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(False)
         for mi in machines_info:
             mo, created = Machine.objects.get_or_create(layer_source = self, up_id = mi['id'], layer_version = Layer_Version.objects.get(layer_source = self, up_id = mi['layerbranch']))
             mo.up_date = mi['updated']
@@ -778,10 +857,16 @@ class LayerIndexLayerSource(LayerSource):
             mo.description = mi['description']
             mo.save()
 
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(True)
+
         # update recipes; paginate by layer version / layer branch
+        print "Fetching target information"
         recipes_info = _get_json_response(apilinks['recipes']
                 + "?filter=layerbranch:%s" % "OR".join(map(lambda x: str(x.up_id), Layer_Version.objects.filter(layer_source = self)))
             )
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(False)
         for ri in recipes_info:
             try:
                 ro, created = Recipe.objects.get_or_create(layer_source = self, up_id = ri['id'], layer_version = Layer_Version.objects.get(layer_source = self, up_id = ri['layerbranch']))
@@ -797,8 +882,10 @@ class LayerIndexLayerSource(LayerSource):
                 ro.file_path = ri['filepath'] + "/" + ri['filename']
                 ro.save()
             except:
-                print "Duplicate Recipe, ignoring: ", vars(ro)
+                #print "Duplicate Recipe, ignoring: ", vars(ro)
                 pass
+        if not connection.features.autocommits_when_autocommit_is_off:
+            transaction.set_autocommit(True)
         pass
 
 class BitbakeVersion(models.Model):
@@ -809,7 +896,7 @@ class BitbakeVersion(models.Model):
     dirpath = models.CharField(max_length=255)
 
     def __unicode__(self):
-        return "%s (%s)" % (self.name, self.branch)
+        return "%s (Branch: %s)" % (self.name, self.branch)
 
 
 class Release(models.Model):
@@ -901,7 +988,7 @@ class Layer_Version(models.Model):
 
     # code lifted, with adaptations, from the layerindex-web application https://git.yoctoproject.org/cgit/cgit.cgi/layerindex-web/
     def _handle_url_path(self, base_url, path):
-        import re
+        import re, posixpath
         if base_url:
             if self.dirpath:
                 if path:
@@ -950,13 +1037,39 @@ class Layer_Version(models.Model):
 
     def get_equivalents_wpriority(self, project):
         """ Returns an ordered layerversion list that satisfies a LayerVersionDependency using the layer name and the current Project Releases' LayerSource priority """
+
+        # layers created for this project, or coming from a build inthe project
+        query = Q(project = project) | Q(build__project = project)
+        if self.up_branch is not None:
+            # the same up_branch name
+            query |= Q(up_branch__name=self.up_branch.name)
+        else:
+            # or we have a layer in the project that's similar to mine (See the layer.name constraint below)
+            query |= Q(projectlayer__project=project)
+
+        candidate_layer_versions = list(Layer_Version.objects.filter(layer__name = self.layer.name).filter(query).select_related('layer_source', 'layer', 'up_branch').order_by("-id"))
+
+        # optimization - if we have only one, we don't need no stinking sort
+        if len(candidate_layer_versions) == 1:
+            return candidate_layer_versions
+
+#        raise Exception(candidate_layer_versions)
+
+        release_priorities = {}
+
+        for ls_id, prio in map(lambda x: (x.layer_source_id, x.priority), project.release.releaselayersourcepriority_set.all().order_by("-priority")):
+            release_priorities[ls_id] = prio
+
         def _get_ls_priority(ls):
+            # if there is no layer source, we have minus infinite priority, as we don't want this layer selected
+            if ls == None:
+                return -10000
             try:
-                return ls.releaselayersourcepriority_set.get(release=project.release).priority
-            except ReleaseLayerSourcePriority.DoesNotExist:
-                raise
-        return sorted(
-                Layer_Version.objects.filter( layer__name = self.layer.name, up_branch__name = self.up_branch.name ),
+                return release_priorities[ls.id]
+            except IndexError:
+                raise Exception("Unknown %d %s" % (ls.id, release_priorities))
+
+        return sorted( candidate_layer_versions ,
                 key = lambda x: _get_ls_priority(x.layer_source),
                 reverse = True)
 
@@ -965,10 +1078,12 @@ class Layer_Version(models.Model):
             return self.commit
         if self.branch is not None and len(self.branch) > 0:
             return self.branch
-        return self.up_branch.name
+        if self.up_branch is not None:
+            return self.up_branch.name
+        return ("Cannot determine the vcs_reference for layer version %s" % vars(self))
 
     def __unicode__(self):
-        return  str(self.layer) + " (" + self.commit +")"
+        return "%d %s (VCS %s, Project %s)" % (self.pk, str(self.layer), self.get_vcs_reference(), self.build.project if self.build is not None else "No project")
 
     class Meta:
         unique_together = ("layer_source", "up_id")

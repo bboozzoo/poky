@@ -27,7 +27,7 @@ inherit siteinfo
 
 # Space separated list of shell scripts with variables defined to supply test
 # results for autoconf tests we cannot run at build time.
-export CONFIG_SITE = "${@siteinfo_get_files(d)}"
+export CONFIG_SITE = "${@siteinfo_get_files(d, False)}"
 
 acpaths = "default"
 EXTRA_AUTORECONF = "--exclude=autopoint"
@@ -111,6 +111,7 @@ autotools_preconfigure() {
 				# regenerate them even if CFLAGS/LDFLAGS are different
 				cd ${S}
 				if [ "${CLEANBROKEN}" != "1" -a \( -e Makefile -o -e makefile -o -e GNUmakefile \) ]; then
+					echo "Running \"${MAKE} clean\" in ${S}"
 					${MAKE} clean
 				fi
 				find ${S} -name \*.la -delete
@@ -186,6 +187,7 @@ python autotools_copy_aclocals () {
     #bb.warn(str(configuredeps2))
 
     cp = []
+    siteconf = []    
     for c in configuredeps:
         if c.endswith("-native"):
             manifest = d.expand("${SSTATE_MANIFESTS}/manifest-${BUILD_ARCH}-%s.populate_sysroot" % c)
@@ -200,6 +202,8 @@ python autotools_copy_aclocals () {
             for l in f:
                 if "/aclocal/" in l and l.strip().endswith(".m4"):
                     cp.append(l.strip())
+                elif "config_site.d/" in l:
+                    cp.append(l.strip())
         except:
             bb.warn("%s not found" % manifest)
 
@@ -207,6 +211,8 @@ python autotools_copy_aclocals () {
         t = os.path.join(aclocaldir, os.path.basename(c))
         if not os.path.exists(t):
             os.symlink(c, t)
+            
+    d.setVar("CONFIG_SITE", siteinfo_get_files(d, False))
 }
 autotools_copy_aclocals[vardepsexclude] += "MACHINE SDK_ARCH BUILD_ARCH SDK_OS BB_TASKDEPDATA"
 

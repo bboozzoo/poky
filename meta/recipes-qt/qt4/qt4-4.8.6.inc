@@ -26,6 +26,7 @@ SRC_URI = "http://download.qt-project.org/official_releases/qt/4.8/${PV}/qt-ever
            file://0030-aarch64_arm64_qatomic_support.patch \
            file://0031-aarch64_arm64_mkspecs.patch \
            file://0032-aarch64_add_header.patch \
+           file://0034-Fix-a-division-by-zero-when-processing-malformed-BMP.patch \
            file://Fix-QWSLock-invalid-argument-logs.patch \
            file://g++.conf \
            file://linux.conf \
@@ -39,7 +40,7 @@ S = "${WORKDIR}/qt-everywhere-opensource-src-${PV}"
 # disable webkit for mips64 n32 temporarily that fails to compile,
 # qt upstream defect:
 # https://bugreports.qt-project.org/browse/QTBUG-39224
-QT_CONFIG_FLAGS_append_mips64 = "${@bb.utils.contains("TUNE_FEATURES", "n32", " -no-webkit", "" ,d)}"
+QT_CONFIG_FLAGS_append_mips64n32 = " -no-webkit"
 
 # disable webkit for aarch64 temporarily that fails to compile
 QT_CONFIG_FLAGS_append_aarch64 = " -no-webkit"

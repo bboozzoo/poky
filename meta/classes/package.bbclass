@@ -239,6 +239,66 @@ python () {
         d.appendVarFlag('do_package', 'deptask', " do_packagedata")
 }
 
+# Get a list of files from file vars by searching files under current working directory
+# The list contains symlinks, directories and normal files.
+def files_from_filevars(filevars):
+    import os,glob
+    cpath = oe.cachedpath.CachedPath()
+    files = []
+    for f in filevars:
+        if os.path.isabs(f):
+            f = '.' + f
+        if not f.startswith("./"):
+            f = './' + f
+        globbed = glob.glob(f)
+        if globbed:
+            if [ f ] != globbed:
+                files += globbed
+                continue
+        files.append(f)
+
+    for f in files:
+        if not cpath.islink(f):
+            if cpath.isdir(f):
+                newfiles = [ os.path.join(f,x) for x in os.listdir(f) ]
+                if newfiles:
+                    files += newfiles
+
+    return files
+
+# Called in package_<rpm,ipk,deb>.bbclass to get the correct list of configuration files
+def get_conffiles(pkg, d):
+    pkgdest = d.getVar('PKGDEST', True)
+    root = os.path.join(pkgdest, pkg)
+    cwd = os.getcwd()
+    os.chdir(root)
+
+    conffiles = d.getVar('CONFFILES_%s' % pkg, True);
+    if conffiles == None:
+        conffiles = d.getVar('CONFFILES', True)
+    if conffiles == None:
+        conffiles = ""
+    conffiles = conffiles.split()
+    conf_orig_list = files_from_filevars(conffiles)
+
+    # Remove links and directories from conf_orig_list to get conf_list which only contains normal files
+    conf_list = []
+    for f in conf_orig_list:
+        if os.path.isdir(f):
+            continue
+        if os.path.islink(f):
+            continue
+        if not os.path.exists(f):
+            continue
+        conf_list.append(f)
+
+    # Remove the leading './'
+    for i in range(0, len(conf_list)):
+        conf_list[i] = conf_list[i][1:]
+
+    os.chdir(cwd)
+    return conf_list
+
 def splitdebuginfo(file, debugfile, debugsrcdir, sourcefile, d):
     # Function to split a single file into two components, one is the stripped
     # target system binary, the other contains any debugging information. The
@@ -403,9 +463,10 @@ python package_get_auto_pr() {
     if not (host is None):
         d.setVar("PRSERV_HOST", host)
 
+    pkgv = d.getVar("PKGV", True)
+
     # PR Server not active, handle AUTOINC
     if not d.getVar('PRSERV_HOST', True):
-        pkgv = d.getVar("PKGV", True)
         if 'AUTOINC' in pkgv:
             d.setVar("PKGV", pkgv.replace("AUTOINC", "0"))
         return
@@ -428,11 +489,11 @@ python package_get_auto_pr() {
         if conn is None:
             conn = oe.prservice.prserv_make_conn(d)
         if conn is not None:
-            if "AUTOINC" in pv:
+            if "AUTOINC" in pkgv:
                 srcpv = bb.fetch2.get_srcrev(d)
                 base_ver = "AUTOINC-%s" % version[:version.find(srcpv)]
                 value = conn.getPR(base_ver, pkgarch, srcpv)
-                d.setVar("PKGV", pv.replace("AUTOINC", str(value)))
+                d.setVar("PKGV", pkgv.replace("AUTOINC", str(value)))
 
             auto_pr = conn.getPR(version, pkgarch, checksum)
     except Exception as e:
@@ -1008,26 +1069,9 @@ python populate_packages () {
             filesvar.replace("//", "/")
 
         origfiles = filesvar.split()
-        files = []
-        for file in origfiles:
-            if os.path.isabs(file):
-                file = '.' + file
-            if not file.startswith("./"):
-                file = './' + file
-            globbed = glob.glob(file)
-            if globbed:
-                if [ file ] != globbed:
-                    files += globbed
-                    continue
-            files.append(file)
+        files = files_from_filevars(origfiles)
 
         for file in files:
-            if not cpath.islink(file):
-                if cpath.isdir(file):
-                    newfiles =  [ os.path.join(file,x) for x in os.listdir(file) ]
-                    if newfiles:
-                        files += newfiles
-                        continue
             if (not cpath.islink(file)) and (not cpath.exists(file)):
                 continue
             if file in seen:
@@ -1574,7 +1618,7 @@ python package_do_shlibs() {
             # /opt/abc/lib/libfoo.so.1 and contains /usr/bin/abc depending on system library libfoo.so.1
             # but skipping it is still better alternative than providing own
             # version and then adding runtime dependency for the same system library
-            if private_libs and n in private_libs:
+            if private_libs and n[0] in private_libs:
                 bb.debug(2, '%s: Dependency %s covered by PRIVATE_LIBS' % (pkg, n[0]))
                 continue
             if n[0] in shlib_provider.keys():

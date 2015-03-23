@@ -70,6 +70,12 @@ python oecore_update_bblayers() {
         sanity_conf_update(bblayers_fn, lines, 'LCONF_VERSION', current_lconf)
         return
 
+    elif current_lconf == 5 and lconf_version > 5:
+        # Null update, to avoid issues with people switching between poky and other distros
+        current_lconf = 6
+        sanity_conf_update(bblayers_fn, lines, 'LCONF_VERSION', current_lconf)
+        return
+
     sys.exit()
 }
 
@@ -470,7 +476,6 @@ def sanity_check_conffiles(status, d):
             if success:
                 bb.note("Your conf/bblayers.conf has been automatically updated.")
                 status.reparse = True
-                break
         if not status.reparse:
             status.addresult("Your version of bblayers.conf has the wrong LCONF_VERSION (has %s, expecting %s).\nPlease compare the your file against bblayers.conf.sample and merge any changes before continuing.\n\"meld conf/bblayers.conf ${COREBASE}/meta*/conf/bblayers.conf.sample\" is a good way to visualise the changes.\n" % (current_lconf, lconf_version))
 
@@ -813,6 +818,10 @@ def check_sanity_everybuild(status, d):
         bb.utils.mkdirhier(tmpdir)
         with open(checkfile, "w") as f:
             f.write(tmpdir)
+
+    # Check vmdk and live can't be built together.
+    if 'vmdk' in d.getVar('IMAGE_FSTYPES', True) and 'live' in d.getVar('IMAGE_FSTYPES', True):
+        status.addresult("Error, IMAGE_FSTYPES vmdk and live can't be built together\n")
 
 def check_sanity(sanity_data):
     import subprocess
