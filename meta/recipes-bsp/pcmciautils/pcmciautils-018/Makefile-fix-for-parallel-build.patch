@@ -10,23 +10,29 @@ Fixed:
 |                            ^
 |   compilation terminated.
 
+And:
+Compiling lex_config.c.
+  src/lex_config.l:34:25: fatal error: yacc_config.h: No such file or directory
+
 Upstream-Status: Pending
 
 Signed-off-by: Robert Yang <liezhi.yang@windriver.com>
 ---
- Makefile |    2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ Makefile |    4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/Makefile b/Makefile
-index d45fdc3..de2a5f9 100644
+index d45fdc3..963453a 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -246,7 +246,7 @@ $(PCMCIA_SOCKET_STARTUP): $(LIBC) src/startup.o src/yacc_config.o src/lex_config
+@@ -246,7 +246,9 @@ $(PCMCIA_SOCKET_STARTUP): $(LIBC) src/startup.o src/yacc_config.o src/lex_config
  	$(QUIET) $(LD) $(LDFLAGS) -o $@ $(CRT0) src/startup.o src/yacc_config.o src/lex_config.o $(LIB_OBJS) $(ARCH_LIB_OBJS)
  	$(QUIET) $(STRIPCMD) $@
  
 -yacc_config.o lex_config.o: %.o: %.c
-+yacc_config.o lex_config.o: %.o: %.c: %.h
++lex_config.o: lex_config.c yacc_config.h
++	$(CC) -c -MD -O -pipe $(CPPFLAGS) $<
++yacc_config.o: yacc_config.c
  	$(CC) -c -MD -O -pipe $(CPPFLAGS) $<
  
  debugtools: ccdv $(CBDUMP) $(CISDUMP)

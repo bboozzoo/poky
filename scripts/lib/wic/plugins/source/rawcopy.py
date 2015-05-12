@@ -16,11 +16,10 @@
 #
 
 import os
-import re
 
 from wic import msger
 from wic.pluginbase import SourcePlugin
-from wic.utils.oe.misc import *
+from wic.utils.oe.misc import exec_cmd, get_bitbake_var
 
 class RawCopyPlugin(SourcePlugin):
     name = 'rawcopy'
@@ -77,7 +76,7 @@ class RawCopyPlugin(SourcePlugin):
         out = exec_cmd(du_cmd)
         filesize = out.split()[0]
 
-        if filesize > part.size:
+        if int(filesize) > int(part.size):
             part.size = filesize
 
         part.source_file = dst

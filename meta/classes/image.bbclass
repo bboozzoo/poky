@@ -76,10 +76,17 @@ LDCONFIGDEPEND ?= "ldconfig-native:do_populate_sysroot"
 LDCONFIGDEPEND_libc-uclibc = ""
 LDCONFIGDEPEND_libc-musl = ""
 
+# This is needed to have depmod data in PKGDATA_DIR,
+# but if you're building small initramfs image
+# e.g. to include it in your kernel, you probably
+# don't want this dependency, which is causing dependency loop
+KERNELDEPMODDEPEND ?= "virtual/kernel:do_packagedata"
+
 do_rootfs[depends] += " \
     makedevs-native:do_populate_sysroot virtual/fakeroot-native:do_populate_sysroot ${LDCONFIGDEPEND} \
     virtual/update-alternatives-native:do_populate_sysroot update-rc.d-native:do_populate_sysroot \
-    virtual/kernel:do_packagedata"
+    ${KERNELDEPMODDEPEND} \
+"
 do_rootfs[recrdeptask] += "do_packagedata"
 
 def command_variables(d):
@@ -180,6 +187,8 @@ POSTINST_LOGFILE ?= "${localstatedir}/log/postinstall.log"
 # Set default target for systemd images
 SYSTEMD_DEFAULT_TARGET ?= '${@bb.utils.contains("IMAGE_FEATURES", "x11-base", "graphical.target", "multi-user.target", d)}'
 ROOTFS_POSTPROCESS_COMMAND += '${@bb.utils.contains("DISTRO_FEATURES", "systemd", "set_systemd_default_target; ", "", d)}'
+
+ROOTFS_POSTPROCESS_COMMAND += 'empty_var_volatile;'
 
 # some default locales
 IMAGE_LINGUAS ?= "de-de fr-fr en-gb"
@@ -326,7 +335,8 @@ MULTILIB_TEMP_ROOTFS = "${WORKDIR}/multilib"
 zap_empty_root_password () {
 	if [ -e ${IMAGE_ROOTFS}/etc/shadow ]; then
 		sed -i 's%^root::%root:*:%' ${IMAGE_ROOTFS}/etc/shadow
-	elif [ -e ${IMAGE_ROOTFS}/etc/passwd ]; then
+        fi
+	if [ -e ${IMAGE_ROOTFS}/etc/passwd ]; then
 		sed -i 's%^root::%root:*:%' ${IMAGE_ROOTFS}/etc/passwd
 	fi
 } 
@@ -377,6 +387,22 @@ set_systemd_default_target () {
 	fi
 }
 
+# If /var/volatile is not empty, we have seen problems where programs such as the
+# journal make assumptions based on the contents of /var/volatile. The journal
+# would then write to /var/volatile before it was mounted, thus hiding the
+# items previously written.
+#
+# This change is to attempt to fix those types of issues in a way that doesn't
+# affect users that may not be using /var/volatile.
+empty_var_volatile () {
+	if [ -e ${IMAGE_ROOTFS}/etc/fstab ]; then
+		match=`awk '$1 !~ "#" && $2 ~ /\/var\/volatile/{print $2}' ${IMAGE_ROOTFS}/etc/fstab 2> /dev/null`
+		if [ -n "$match" ]; then
+			find ${IMAGE_ROOTFS}/var/volatile -mindepth 1 -delete
+		fi
+	fi
+}
+
 # Turn any symbolic /sbin/init link into a file
 remove_init_link () {
 	if [ -h ${IMAGE_ROOTFS}/sbin/init ]; then
@@ -396,6 +422,7 @@ python write_image_manifest () {
     from oe.rootfs import image_list_installed_packages
     with open(d.getVar('IMAGE_MANIFEST', True), 'w+') as image_manifest:
         image_manifest.write(image_list_installed_packages(d, 'ver'))
+        image_manifest.write("\n")
 }
 
 # Can be use to create /etc/timestamp during image construction to give a reasonably 

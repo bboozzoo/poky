@@ -33,8 +33,8 @@ logger      = logging.getLogger("BitBake")
 parselog    = logging.getLogger("BitBake.Parsing")
 
 class ConfigParameters(object):
-    def __init__(self):
-        self.options, targets = self.parseCommandLine()
+    def __init__(self, argv=sys.argv):
+        self.options, targets = self.parseCommandLine(argv)
         self.environment = self.parseEnvironment()
 
         self.options.pkgs_to_build = targets or []
@@ -46,7 +46,7 @@ class ConfigParameters(object):
         for key, val in self.options.__dict__.items():
             setattr(self, key, val)
 
-    def parseCommandLine(self):
+    def parseCommandLine(self, argv=sys.argv):
         raise Exception("Caller must implement commandline option parsing")
 
     def parseEnvironment(self):
@@ -269,8 +269,11 @@ class CookerDataBuilder(object):
             layers = (data.getVar('BBLAYERS', True) or "").split()
 
             data = bb.data.createCopy(data)
+            approved = bb.utils.approved_variables()
             for layer in layers:
                 parselog.debug(2, "Adding layer %s", layer)
+                if 'HOME' in approved and '~' in layer:
+                    layer = os.path.expanduser(layer)
                 data.setVar('LAYERDIR', layer)
                 data = parse_config_file(os.path.join(layer, "conf", "layer.conf"), data)
                 data.expandVarref('LAYERDIR')

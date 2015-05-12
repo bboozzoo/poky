@@ -21,6 +21,7 @@ SRC_URI += "file://acinclude.m4 \
             file://misc-mke2fs.c-return-error-when-failed-to-populate-fs.patch \
             file://cache_inode.patch \
             file://CVE-2015-0247.patch \
+            file://0001-libext2fs-fix-potential-buffer-overflow-in-closefs.patch \
 "
 
 SRC_URI[md5sum] = "3f8e41e63b432ba114b33f58674563f7"
@@ -54,6 +55,8 @@ do_install () {
 	oe_multilib_header ext2fs/ext2_types.h
 	install -d ${D}${base_bindir}
 	mv ${D}${bindir}/chattr ${D}${base_bindir}/chattr.e2fsprogs
+
+	install -v -m 755 ${S}/contrib/populate-extfs.sh ${D}${base_sbindir}/
 }
 
 do_install_append_class-target() {
@@ -87,3 +90,20 @@ ALTERNATIVE_${PN} = "chattr"
 ALTERNATIVE_PRIORITY = "100"
 ALTERNATIVE_LINK_NAME[chattr] = "${base_bindir}/chattr"
 ALTERNATIVE_TARGET[chattr] = "${base_bindir}/chattr.e2fsprogs"
+
+inherit ptest
+SRC_URI += "file://run-ptest"
+SRC_URI += "file://ptest.patch"
+
+RDEPENDS_${PN}-ptest += "${PN} ${PN}-tune2fs coreutils procps"
+#RDEPENDS_${PN}-ptest += "expect"
+
+do_compile_ptest() {
+	oe_runmake -C ${B}/tests
+}
+
+do_install_ptest() {
+	cp -a ${B}/tests ${D}${PTEST_PATH}/test
+	cp -a ${S}/tests/* ${D}${PTEST_PATH}/test
+	sed -e 's!../e2fsck/e2fsck!e2fsck!g' -i ${D}${PTEST_PATH}/test/*/expect*
+}

@@ -15,22 +15,22 @@ vim: expandtab tabstop=2
 <script src="{% static "js/angular-sanitize.min.js" %}"></script>
 <script src="{% static "js/ui-bootstrap-tpls-0.11.0.js" %}"></script>
 
-
 {% if lvs_nos == 0 %}
-<div class="alert alert-info">
-			<p>
-			Toaster has no layer information; without layer information, you cannot run builds.<br/> To generate layer information you can:
-			</p>
-			<ul>
-			 <li> <a href="https://wiki.yoctoproject.org/wiki/Setting_up_a_hosted_managed_mode_for_Toaster#LayerSources">Configure a layer source</a>
-			 </li>
-			 <li> <a href="{% url 'importlayer' %}">Import a layer</a>
-			</ul>
+
+  <div class="page-header">
+    <h1> {{ project.name }} </h1>
+  </div>
+  <div class="alert alert-info lead">
+	  <p>Toaster has no layer information. Without layer information, you cannot run builds. To generate layer information you can:</p>
+		<ul>
+			 <li> <a href="http://www.yoctoproject.org/docs/latest/toaster-manual/toaster-manual.html#layer-source">Configure a layer source</a></li>
+			 <li> <a href="{% url 'importlayer' %}">Import a layer</a></li>
+		</ul>
 </div>
 
 {%else%}
-<div id="main" role="main" ng-app="project" ng-controller="prjCtrl" class="top-padded">
 
+<div id="main" role="main" ng-app="project" ng-controller="prjCtrl" class="top-padded">
 
   <!-- project name -->
   <div class="page-header">
@@ -77,14 +77,14 @@ vim: expandtab tabstop=2
   <script type="text/ng-template" id="change_version_modal">
     <div class="modal-header">
         <button type="button" class="close" data-dismiss="modal" aria-hidden="true">x</button>
-        <h3>Changing release to {[releaseName]}</h3>
+        <h3>Changing release to {[releaseDescription]}</h3>
       </div>
       <div class="modal-body">
-        <p>The following project layers do not exist for {[releaseName]}:</p>
+        <p>The following project layers do not exist for the {[releaseDescription]} release:</p>
         <ul>
           <li ng-repeat="i in items"><span class="layer-info" data-toggle="tooltip" tooltip="{[i.detail]}">{[i.name]}</span></li>
         </ul>
-        <p>If you change the release to {[releaseName]}, the above layers will be deleted from your project layers.</p>
+        <p>If you change the release to {[releaseDescription]}, the above layers will be deleted from your project.</p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" ng-click="ok()">Change release and delete layers</button>
@@ -104,15 +104,15 @@ vim: expandtab tabstop=2
   <div class="well">
     <form class="build-form" ng-submit="buildNamedTarget()">
       <div class="input-append controls">
-        <input type="text" class="huge input-xxlarge" placeholder="Type the target(s) you want to build" autocomplete="off" ng-model="targetName" typeahead="e.name for e in getAutocompleteSuggestions('targets', $viewValue)|filter:$viewValue" typeahead-template-url="suggestion_details" ng-disabled="!layers.length"/>
+        <input type="text" class="huge input-xxlarge" placeholder="Type the recipe(s) you want to build" autocomplete="off" ng-model="targetName" typeahead="e.name for e in getAutocompleteSuggestions('targets', $viewValue)|filter:$viewValue" typeahead-template-url="suggestion_details" ng-disabled="!layers.length"/>
         <button type="submit" class="btn btn-large btn-primary" ng-disabled="!targetName.length">
         Build
         </button>
       </div>
-      <i class="icon-question-sign get-help get-help-blue" title="Type the name of one or more targets you want to build, separated by a space. You can also specify a task by appending a semicolon and a task name to a target name, like so: <code>core-image-minimal:do_build</code>"></i>
+      <i class="icon-question-sign get-help get-help-blue" title="Type the name of one or more recipes you want to build, separated by a space. You can also specify a task by appending a semicolon and a task name to a recipe name, like so: <code>core-image-minimal:do_build</code>"></i>
       <p>
-        <a href="{% url 'all-targets' %}">View all compatible targets</a>
-        <i class="icon-question-sign get-help get-help-blue heading-help" title="View all the targets you can build with the release selected for this project, which is {[project.release.desc]}"></i>
+        <a href="{% url 'all-targets' %}">View all compatible recipes</a>
+        <i class="icon-question-sign get-help get-help-blue heading-help" title="View all the recipes you can build with the release selected for this project, which is {[project.release.desc]}"></i>
         {% if completedbuilds.count %}
           | <a href="{% url 'projectbuilds' project.id %}">View all project builds ({{completedbuilds.count}})</a>
         {% endif %}
@@ -299,7 +299,7 @@ vim: expandtab tabstop=2
         <a href="{% url 'importlayer' %}">Import layer</a></p>
       <ul class="unstyled configuration-list">
           <li ng-repeat="l in layers track by l.id" class="animate-repeat">
-            <a href="{[l.layerdetailurl]}" class="layer-info" data-toggle="tooltip" tooltip="{[l.giturl]} | {[l.branch.name]}">{[l.name]}</a>
+            <a href="{[l.layerdetailurl]}" class="layer-info" data-toggle="tooltip" tooltip-placement="right" tooltip="{[l.giturl]} | {[l.branch.name]}">{[l.name]}</a>
             <i class="icon-trash" ng-click="layerDel(l.id)" tooltip="Delete"></i>
                       </li>
       </ul>
@@ -309,33 +309,33 @@ vim: expandtab tabstop=2
     <!-- project targets -->
     <div id="target-container" class="well well-transparent span4">
       <h3>
-        Targets
-        <i class="icon-question-sign get-help heading-help" title="What you build, often a recipe producing a root file system file (an image). Something like <code>core-image-minimal</code> or <code>core-image-sato</code>"></i>
+        Recipes
+        <i class="icon-question-sign get-help heading-help" title="What you build, often an image recipe that produces a root file system file. Something like <code>core-image-minimal</code> or <code>core-image-sato</code>"></i>
       </h3>
         <form ng-submit="buildNamedTarget()">
           <div class="input-append">
-            <input type="text" class="input-xlarge" placeholder="Type the target(s) you want to build" autocomplete="off" data-minLength="1"  ng-model="targetName1" typeahead="e.name for e in getAutocompleteSuggestions('targets', $viewValue)|filter:$viewValue" typeahead-template-url="suggestion_details" ng-disabled="!layers.length">
+            <input type="text" class="input-xlarge" placeholder="Type the recipe(s) you want to build" autocomplete="off" data-minLength="1"  ng-model="targetName1" typeahead="e.name for e in getAutocompleteSuggestions('targets', $viewValue)|filter:$viewValue" typeahead-template-url="suggestion_details" ng-disabled="!layers.length">
             <button type="submit" class="btn btn-primary" ng-disabled="!targetName1.length">
               Build </button>
           </div>
           {% csrf_token %}
         </form>
         <p>
-          <a href="{% url 'all-targets' %}">View all compatible targets</a>
-          <i class="icon-question-sign get-help" title="View all the targets you can build with the release selected for this project, which is {[project.release.desc]}"></i>
+          <a href="{% url 'all-targets' %}">View all compatible recipes</a>
+          <i class="icon-question-sign get-help" title="View all the recipes you can build with the release selected for this project, which is {[project.release.desc]}"></i>
         </p>
         <div ng-if="frequenttargets.length">
         <h4 class="air">
-            Most built targets
+            Most built recipes
         </h4>
-        <ul class="unstyled configuration-list">
+          <ul class="unstyled configuration-list {[mutedtargets]}">
           <li ng-repeat="t in frequenttargets">
             <label class="checkbox">
-              <input type="checkbox" ng-model="mostBuiltTargets[t]">{[t]}
+              <input type="checkbox" ng-model="mostBuiltTargets[t]" ng-disabled="disableBuildCheckbox(t)" ng-checked="mostBuiltTargets[t] && !disableBuildCheckbox(t)">{[t]}
             </label>
           </li>
         </ul>
-        <button class="btn btn-large btn-primary" ng-disabled="enableBuildSelectedTargets()" ng-click="buildSelectedTargets()">Build selected targets</button>
+        <button class="btn btn-large btn-primary" ng-disabled="enableBuildSelectedTargets()" ng-click="buildSelectedTargets()">Build selected recipes</button>
         </div>
     </div>
 
@@ -397,12 +397,11 @@ vim: expandtab tabstop=2
      </form>
     </div>
 
-
-    <h3>
+    <h3 ng-if="releases.length > 1">
       Release
       <i class="icon-question-sign get-help heading-help" title="The version of the build system you want to use"></i>
     </h3>
-    <p class="lead" id="change-project-version-opposite">
+    <p ng-if="releases.length > 1" class="lead" id="change-project-version-opposite">
       <span id="project-version">{[project.release.desc]}</span>
       <i id="change-version" class="icon-pencil" ng-click="toggle('#change-project-version')" ></i>
     </p>
@@ -434,7 +433,7 @@ angular.element(document).ready(function() {
   scope.urls.xhr_edit = "{% url 'xhr_projectedit' project.id %}";
   scope.urls.xhr_datatypeahead = "{% url 'xhr_datatypeahead' %}";
   scope.urls.layers = "{% url 'layers' %}";
-  scope.urls.targets = "{% url 'targets' %}";
+  scope.urls.targets = "{% url 'all-targets' %}";
   scope.urls.importlayer = "{% url 'importlayer'%}";
   scope.urls.layer = "{% url 'base_layerdetails' %}";
   scope.project = {{prj|json}};
@@ -444,7 +443,8 @@ angular.element(document).ready(function() {
   scope.frequenttargets = {{freqtargets|json}};
   scope.machine = {{machine|json}};
   scope.releases = {{releases|json}};
-
+  scope.layerCount = scope.layers.length;
+  scope.mutedtargets = (scope.layerCount == 0 ? "muted" : "")
   var now = (new Date()).getTime();
   scope.todaydate = now - (now % 86400000);
 

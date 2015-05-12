@@ -25,7 +25,6 @@
 #
 
 import os
-import stat
 import shutil
 
 from wic import kickstart, msger
@@ -33,7 +32,6 @@ from wic.utils import fs_related, runner, misc
 from wic.utils.partitionedfs import Image
 from wic.utils.errors import CreatorError, ImageError
 from wic.imager.baseimager import BaseImageCreator
-from wic.utils.oe.misc import *
 from wic.plugin import pluginmgr
 
 disk_methods = {
@@ -242,7 +240,7 @@ class DirectImageCreator(BaseImageCreator):
         """
         parts = self._get_parts()
 
-        self.__image = Image()
+        self.__image = Image(self.native_sysroot)
 
         for p in parts:
             # as a convenience, set source to the boot partition source
@@ -270,11 +268,11 @@ class DirectImageCreator(BaseImageCreator):
                                        p.source_file,
                                        p.fstype,
                                        p.label,
-                                       fsopts = p.fsopts,
-                                       boot = p.active,
-                                       align = p.align,
-                                       no_table = p.no_table,
-                                       part_type = p.part_type)
+                                       fsopts=p.fsopts,
+                                       boot=p.active,
+                                       align=p.align,
+                                       no_table=p.no_table,
+                                       part_type=p.part_type)
 
         self._restore_fstab(fstab)
 

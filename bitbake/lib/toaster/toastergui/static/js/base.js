@@ -21,12 +21,13 @@ function basePageInit (ctx) {
   _checkProjectBuildable()
   _setupNewBuildButton();
 
+  var currentProjectId = libtoaster.ctx.projectId;
 
   function _checkProjectBuildable(){
-    if (ctx.projectId == undefined)
+    if (currentProjectId == undefined)
       return;
 
-    libtoaster.getProjectInfo(ctx.projectInfoUrl, ctx.projectId,
+    libtoaster.getProjectInfo(ctx.projectInfoUrl, currentProjectId,
       function(data){
         if (data.machine.name == undefined || data.layers.length == 0) {
           /* we can't build anything with out a machine and some layers */
@@ -51,18 +52,18 @@ function basePageInit (ctx) {
     /* If we don't have a current project then present the set project
      * form.
      */
-    if (ctx.projectId == undefined) {
+    if (currentProjectId == undefined) {
       $('#change-project-form').show();
       $('#project .icon-pencil').hide();
     }
 
-    libtoaster.makeTypeahead(newBuildTargetInput, ctx.xhrDataTypeaheadUrl, { type : "targets", project_id: ctx.projectId }, function(item){
+    libtoaster.makeTypeahead(newBuildTargetInput, { type : "targets", project_id: currentProjectId }, function(item){
         /* successfully selected a target */
         selectedTarget = item;
     });
 
 
-    libtoaster.makeTypeahead(newBuildProjectInput, ctx.xhrDataTypeaheadUrl, { type : "projects" }, function(item){
+    libtoaster.makeTypeahead(newBuildProjectInput, { type : "projects" }, function(item){
         /* successfully selected a project */
         newBuildProjectSaveBtn.removeAttr("disabled");
         selectedProject = item;
@@ -91,19 +92,19 @@ function basePageInit (ctx) {
       if (!selectedTarget)
         selectedTarget = { name: newBuildTargetInput.val() };
       /* fire and forget */
-      libtoaster.startABuild(ctx.projectBuildUrl, ctx.projectId, selectedTarget.name, null, null);
-      window.location.replace(ctx.projectPageUrl+ctx.projectId);
+      libtoaster.startABuild(ctx.projectBuildUrl, currentProjectId, selectedTarget.name, null, null);
+      window.location.replace(ctx.projectBasePageUrl+currentProjectId);
     });
 
     newBuildProjectSaveBtn.click(function() {
-      ctx.projectId = selectedProject.id
+      currentProjectId = selectedProject.id
       /* Update the typeahead project_id paramater */
       _checkProjectBuildable();
-      newBuildTargetInput.data('typeahead').options.xhrParams.project_id = ctx.projectId;
+      newBuildTargetInput.data('typeahead').options.xhrParams.project_id = currentProjectId;
       newBuildTargetInput.val("");
 
-      $("#new-build-button #project a").text(selectedProject.name).attr('href', ctx.projectPageUrl+ctx.projectId);
-      $("#new-build-button .alert a").attr('href', ctx.projectPageUrl+ctx.projectId);
+      $("#new-build-button #project a").text(selectedProject.name).attr('href', ctx.projectBasePageUrl+currentProjectId);
+      $("#new-build-button .alert a").attr('href', ctx.projectBasePageUrl+currentProjectId);
 
 
       $("#change-project-form").slideUp({ 'complete' : function() {

@@ -424,6 +424,24 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
         $scope.layerAddId = item.id;
     };
 
+    $scope.machineSelect = function (machineName) {
+        $scope._makeXHRCall({
+            method: "POST", url: $scope.urls.xhr_edit,
+            data: {
+              machineName:  machineName,
+            }
+        }).then(function () {
+          $scope.machine.name = machineName;
+
+          $scope.displayAlert($scope.zone2alerts, "You have changed the machine to: <strong>" + $scope.machine.name + "</strong>", "alert-info");
+          var machineDistro = angular.element("#machine-distro");
+
+          angular.element("html, body").animate({ scrollTop: machineDistro.position().top }, 700).promise().done(function() {
+            $animate.addClass(machineDistro, "machines-highlight");
+          });
+        });
+    };
+
 
     $scope.layerAddById = function (id) {
         $scope.layerAddId = id;
@@ -484,11 +502,13 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
                                  layerAdd: selectedArray.join(","),
                              }
                          }).then(function () {
+                             $scope.adjustMostBuiltItems(selectedArray.length);
                              $scope.layerAddName = undefined;
                          });
                      });
                  }
                  else {
+                         $scope.adjustMostBuiltItems(1);
                          $scope._makeXHRCall({
                              method: "POST", url: $scope.urls.xhr_edit,
                              data: {
@@ -503,6 +523,7 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
     };
 
     $scope.layerDel = function(id) {
+        $scope.adjustMostBuiltItems(-1);
         $scope._makeXHRCall({
             method: "POST", url: $scope.urls.xhr_edit,
             data: {
@@ -510,6 +531,14 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
             }
         });
     };
+
+    $scope.adjustMostBuiltItems = function(listDelta) {
+        $scope.layerCount += listDelta;
+        $scope.mutedtargets = ($scope.layerCount == 0 ? "muted" : "");
+    };
+
+/*
+*/
 
 
     /**
@@ -532,9 +561,10 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
                      // activate modal
                      var modalInstance = $modal.open({
                        templateUrl: 'change_version_modal',
-                       controller: function ($scope, $modalInstance, items, releaseName) {
+                       controller: function ($scope, $modalInstance, items, releaseName, releaseDescription) {
                          $scope.items =  items;
                          $scope.releaseName = releaseName;
+                         $scope.releaseDescription = releaseDescription;
 
                          $scope.ok = function() {
                              $modalInstance.close();
@@ -551,6 +581,9 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
                          },
                          releaseName: function () {
                              return $scope.releases.filter(function (e) { if (e.id == $scope.projectVersion) return e;})[0].name;
+                         },
+                         releaseDescription: function () {
+                             return $scope.releases.filter(function (e) { if (e.id == $scope.projectVersion) return e;})[0].description;
                          },
                        }
                      });
@@ -608,7 +641,6 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
 
                 // requirement https://bugzilla.yoctoproject.org/attachment.cgi?id=2229, notification for changed version to include layers
                 $scope.zone2alerts.forEach(function (e) { e.close(); });
-                alertText += "This has caused the following changes in your project layers:<ul>";
 
 
                 // warnings - this is executed AFTER the generic XHRCall handling is done; at this point,
@@ -620,6 +652,10 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
                         function (e) {addedLayers.push(e); },
                         function (e) {deletedLayers.push(e); });
 
+                    var hasDifferentLayers = (addedLayers.length || deletedLayers.length)
+                    if (hasDifferentLayers) {
+                        alertText += "This has caused the following changes in your project layers:<ul>";
+                    }
                     // some of the deleted layers are actually replaced (changed) layers
                     var changedLayers = [];
                     deletedLayers.forEach(function (e) {
@@ -633,14 +669,16 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
                     });
 
                     if (addedLayers.length > 0) {
-                        alertText += "<li><strong>"+addedLayers.length+"</strong> layer" + ((addedLayers.length>1)?"s changed: ":" changed: ") + addedLayers.map(function (e) { return "<a href=\""+e.layerdetailurl+"\">"+e.name+"</a>"; }).join(", ") + "</li>";
+                        alertText += "<li><strong>"+addedLayers.length+"</strong> layer" + ((addedLayers.length>1)?"s":"") + " changed to the <strong> " + $scope.project.release.name + " </strong> branch: " + addedLayers.map(function (e) { return "<a href=\""+e.layerdetailurl+"\">"+e.name+"</a>"; }).join(", ") + "</li>";
                     }
                     if (deletedLayers.length > 0) {
-                        alertText += "<li><strong>"+deletedLayers.length+"</strong> layer" + ((deletedLayers.length>1)?"s deleted: ":"deleted: ") + deletedLayers.map(function (e) { return "<a href=\""+e.layerdetailurl+"\">"+e.name+"</a>"; }).join(", ") + "</li>";
+                        alertText += "<li><strong>"+deletedLayers.length+"</strong> layer" + ((deletedLayers.length>1)?"s":"") + " deleted: " + deletedLayers.map(function (e) { return "<a href=\""+e.layerdetailurl+"\">"+e.name+"</a>"; }).join(", ") + "</li>";
                     }
 
                 }
-                alertText += "</ul>";
+                if (hasDifferentLayers) {
+                    alertText += "</ul>";
+                }
             }
             $scope.displayAlert(alertZone, alertText, "alert-info");
         });
@@ -672,16 +710,7 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
                     "Your project <strong>" + $scope.project.name +
                     "</strong> has been created. You can now <a href=\""+ $scope.urls.layers +
                     "\">add layers</a> and <a href=\""+ $scope.urls.targets +
-                    "\">select targets</a> you want to build.", "alert-success");
-        });
-
-        _cmdExecuteWithParam("/machineselected", function () {
-            $scope.displayAlert($scope.zone2alerts, "You have changed the machine to: <strong>" + $scope.machine.name + "</strong>", "alert-info");
-            var machineDistro = angular.element("#machine-distro");
-
-            angular.element("html, body").animate({ scrollTop: machineDistro.position().top }, 700).promise().done(function() {
-              $animate.addClass(machineDistro, "machines-highlight");
-            });
+                    "\">select recipes</a> you want to build.", "alert-success");
         });
 
         _cmdExecuteWithParam("/layerimported", function () {
@@ -732,7 +761,9 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
 
         _cmdExecuteWithParam("/machineselect=", function (machine) {
             $scope.machineName = machine;
-            $scope.toggle('#select-machine');
+            $scope.machine.name = machine;
+            $scope.machineSelect(machine);
+
         });
 
 
@@ -789,6 +820,14 @@ projectApp.controller('prjCtrl', function($scope, $modal, $http, $interval, $loc
         keys = keys.filter(function (e) { if ($scope.mostBuiltTargets[e]) return e; });
         return keys.length === 0;
     };
+
+    $scope.disableBuildCheckbox = function(t) {
+        if ( $scope.layerCount == 0 ) {
+            $scope.mostBuiltTargets[t] = 0;
+            return true;
+        };
+        return false;
+    }
 
     $scope.buildSelectedTargets = function () {
         var keys = Object.keys($scope.mostBuiltTargets);

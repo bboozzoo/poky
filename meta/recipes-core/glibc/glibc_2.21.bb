@@ -25,6 +25,7 @@ SRC_URI = "git://sourceware.org/git/glibc.git;branch=${BRANCH} \
            file://0001-Add-unused-attribute.patch \
            file://0001-When-disabling-SSE-also-make-sure-that-fpmath-is-not.patch \
            file://0001-yes-within-the-path-sets-wrong-config-variables.patch \
+           file://elf-Makefile-fix-a-typo.patch \
            ${EGLIBCPATCHES} \
           "
 EGLIBCPATCHES = "\
@@ -67,11 +68,9 @@ GLIBC_BROKEN_LOCALES = " _ER _ET so_ET yn_ER sid_ET tr_TR mn_MN gez_ET gez_ER bn
 # this helps in easing out parsing for non-glibc system libraries
 #
 python __anonymous () {
-    import re
-    notglibc = (re.match('.*uclibc$', d.getVar('TARGET_OS', True)) != None) or (re.match('.*musl$', d.getVar('TARGET_OS', True)) != None)
-    if notglibc:
-        raise bb.parse.SkipPackage("incompatible with target %s" %
-                                   d.getVar('TARGET_OS', True))
+    if d.getVar('TCLIBC', True) != "glibc":
+        raise bb.parse.SkipPackage("incompatible with %s C library" %
+                                   d.getVar('TCLIBC', True))
 }
 
 EXTRA_OECONF = "--enable-kernel=${OLDEST_KERNEL} \
