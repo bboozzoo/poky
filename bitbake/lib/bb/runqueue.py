@@ -1096,6 +1096,13 @@ class RunQueue:
             raise
         except SystemExit:
             raise
+        except bb.BBHandledException:
+            try:
+                self.teardown_workers()
+            except:
+                pass
+            self.state = runQueueComplete
+            raise
         except:
             logger.error("An uncaught exception occured in runqueue, please see the failure below:")
             try:
@@ -1154,9 +1161,14 @@ class RunQueue:
             sq_hash.append(self.rqdata.runq_hash[task])
             sq_taskname.append(taskname)
             sq_task.append(task)
-        call = self.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d)"
         locs = { "sq_fn" : sq_fn, "sq_task" : sq_taskname, "sq_hash" : sq_hash, "sq_hashfn" : sq_hashfn, "d" : self.cooker.expanded_data }
-        valid = bb.utils.better_eval(call, locs)
+        try:
+            call = self.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d, siginfo=True)"
+            valid = bb.utils.better_eval(call, locs)
+        # Handle version with no siginfo parameter
+        except TypeError:
+            call = self.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d)"
+            valid = bb.utils.better_eval(call, locs)
         for v in valid:
             valid_new.add(sq_task[v])
 
@@ -1267,6 +1279,9 @@ class RunQueueExecute:
         rq.workerpipe.setrunqueueexec(self)
         if rq.fakeworkerpipe:
             rq.fakeworkerpipe.setrunqueueexec(self)
+
+        if self.number_tasks <= 0:
+             bb.fatal("Invalid BB_NUMBER_THREADS %s" % self.number_tasks)
 
     def runqueue_process_waitpid(self, task, status):
 
@@ -1565,7 +1580,12 @@ class RunQueueExecuteTasks(RunQueueExecute):
             taskdep = self.rqdata.dataCache.task_deps[fn]
             if 'fakeroot' in taskdep and taskname in taskdep['fakeroot'] and not self.cooker.configuration.dry_run:
                 if not self.rq.fakeworker:
-                    self.rq.start_fakeworker(self)
+                    try:
+                        self.rq.start_fakeworker(self)
+                    except OSError as exc:
+                        logger.critical("Failed to spawn fakeroot worker to run %s:%s: %s" % (fn, taskname, str(exc)))
+                        self.rq.state = runQueueFailed
+                        return True
                 self.rq.fakeworker.stdin.write("<runtask>" + pickle.dumps((fn, task, taskname, False, self.cooker.collection.get_file_appends(fn), taskdepdata)) + "</runtask>")
                 self.rq.fakeworker.stdin.flush()
             else:

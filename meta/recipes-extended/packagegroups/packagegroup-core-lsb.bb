@@ -7,7 +7,10 @@ DESCRIPTION = "Packages required to satisfy the Linux Standard Base (LSB) specif
 PR = "r10"
 LICENSE = "MIT"
 
-inherit packagegroup
+inherit packagegroup distro_features_check
+
+# The libxt, libxtst and others require x11 in DISTRO_FEATURES
+REQUIRED_DISTRO_FEATURES = "x11"
 
 #
 # We will skip parsing this packagegeoup for non-glibc systems
@@ -54,6 +57,7 @@ RDEPENDS_packagegroup-core-sys-extended = "\
     dhcp-client \
     gamin \
     hdparm \
+    lighttpd \
     libaio \
     lrzsz \
     lzo \
@@ -200,8 +204,8 @@ RDEPENDS_packagegroup-core-lsb-python = "\
 "
 
 def get_libqt3(d):
-    if 'linuxstdbase' in d.getVar('DISTROOVERRIDES') or "":
-        if 'qt3' in d.getVar('BBFILE_COLLECTIONS') or "":
+    if 'linuxstdbase' in d.getVar('DISTROOVERRIDES', False) or "":
+        if 'qt3' in d.getVar('BBFILE_COLLECTIONS', False) or "":
             return 'libqt-mt3'
 
         bb.warn('The meta-qt3 layer should be added, this layer provides Qt 3.x' \
