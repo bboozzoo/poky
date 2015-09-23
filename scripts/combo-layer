@@ -29,6 +29,7 @@ import tempfile
 import ConfigParser
 import re
 from collections import OrderedDict
+from string import Template
 
 __version__ = "0.2.1"
 
@@ -77,15 +78,27 @@ class Configuration(object):
                         value = getattr(parser, 'get' + types[name])(section, name)
                     self.repos[repo][name] = value
 
+        def readglobalsection(parser, section):
+            for (name, value) in parser.items(section):
+                if name == "commit_msg":
+                    self.commit_msg_template = value
+
         logger.debug("Loading config file %s" % self.conffile)
         self.parser = ConfigParser.ConfigParser()
         with open(self.conffile) as f:
             self.parser.readfp(f)
 
+        # initialize default values
+        self.commit_msg_template = "Automatic commit to update last_revision"
+
         self.repos = {}
         for repo in self.parser.sections():
-            self.repos[repo] = {}
-            readsection(self.parser, repo, repo)
+            if repo == "combo-layer-settings":
+                # special handling for global settings
+                readglobalsection(self.parser, repo)
+            else:
+                self.repos[repo] = {}
+                readsection(self.parser, repo, repo)
 
         # Load local configuration, if available
         self.localconffile = None
@@ -572,10 +585,27 @@ def action_pull(conf, args):
         repo = conf.repos[name]
         ldir = repo['local_repo_dir']
         branch = repo.get('branch', "master")
-        runcmd("git checkout %s" % branch, ldir)
-        logger.info("git pull for component repo %s in %s ..." % (name, ldir))
-        output=runcmd("git pull", ldir)
-        logger.info(output)
+        logger.info("update branch %s of component repo %s in %s ..." % (branch, name, ldir))
+        if not conf.hard_reset:
+            # Try to pull only the configured branch. Beware that this may fail
+            # when the branch is currently unknown (for example, after reconfiguring
+            # combo-layer). In that case we need to fetch everything and try the check out
+            # and pull again.
+            try:
+                runcmd("git checkout %s" % branch, ldir, printerr=False)
+            except subprocess.CalledProcessError:
+                output=runcmd("git fetch", ldir)
+                logger.info(output)
+                runcmd("git checkout %s" % branch, ldir)
+                runcmd("git pull --ff-only", ldir)
+            else:
+                output=runcmd("git pull --ff-only", ldir)
+                logger.info(output)
+        else:
+            output=runcmd("git fetch", ldir)
+            logger.info(output)
+            runcmd("git checkout %s" % branch, ldir)
+            runcmd("git reset --hard FETCH_HEAD", ldir)
 
 def action_update(conf, args):
     """
@@ -715,7 +745,21 @@ def action_update(conf, args):
     if output:
         logger.info("Committing updated configuration file")
         if output.lstrip().startswith("M"):
-            runcmd('git commit -m "Automatic commit to update last_revision" %s' % relpath)
+
+            # create the "components" string
+            component_str = "all components"
+            if len(components) > 0:
+                # otherwise tell which components were actually changed
+                component_str = ", ".join(components)
+
+            # expand the template with known values
+            template = Template(conf.commit_msg_template)
+            raw_msg = template.substitute(components = component_str)
+
+            # sanitize the string before using it in command line
+            msg = raw_msg.replace('"', '\\"')
+
+            runcmd('git commit -m "%s" %s' % (msg, relpath))
 
 def apply_patchlist(conf, repos):
     """
@@ -867,6 +911,10 @@ Action:
 
     parser.add_option("-n", "--no-pull", help = "skip pulling component repos during update",
                action = "store_true", dest = "nopull", default = False)
+
+    parser.add_option("--hard-reset",
+               help = "instead of pull do fetch and hard-reset in component repos",
+               action = "store_true", dest = "hard_reset", default = False)
 
     parser.add_option("-H", "--history", help = "import full history of components during init",
                       action = "store_true", default = False)

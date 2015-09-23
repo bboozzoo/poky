@@ -9,7 +9,6 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=3bf50002aefd002f49e7bb854063f7e7 \
 SECTION = "libs"
 
 DEPENDS = "glib-2.0"
-DEPENDS_append_linuxstdbase = " virtual/libx11"
 
 MAJ_VER = "${@oe.utils.trim_version("${PV}", 2)}"
 
@@ -18,6 +17,7 @@ SRC_URI = "${GNOME_MIRROR}/${BPN}/${MAJ_VER}/${BPN}-${PV}.tar.xz \
            file://extending-libinstall-dependencies.patch \
            file://run-ptest \
            file://fatal-loader.patch \
+           file://0001-pixops-Be-more-careful-about-integer-overflow.patch \
            "
 
 SRC_URI[md5sum] = "4fed0d54432f1b69fc6e66e608bd5542"

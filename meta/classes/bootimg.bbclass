@@ -142,11 +142,14 @@ build_iso() {
 	# when it exceeds 3.8GB, the specification is 4G - 1 bytes, we need
 	# leave a few space for other files.
 	mkisofs_iso_level=""
-	rootfs_img_size=`stat -c '%s' ${ISODIR}/rootfs.img`
-	# 4080218931 = 3.8 * 1024 * 1024 * 1024
-	if [ $rootfs_img_size -gt 4080218931 ]; then
-		bbnote "${ISODIR}/rootfs.img execeeds 3.8GB, using '-iso-level 3' for mkisofs"
-		mkisofs_iso_level="-iso-level 3"
+
+        if [ -n "${ROOTFS}" ] && [ -s "${ROOTFS}" ]; then
+		rootfs_img_size=`stat -c '%s' ${ISODIR}/rootfs.img`
+		# 4080218931 = 3.8 * 1024 * 1024 * 1024
+		if [ $rootfs_img_size -gt 4080218931 ]; then
+			bbnote "${ISODIR}/rootfs.img execeeds 3.8GB, using '-iso-level 3' for mkisofs"
+			mkisofs_iso_level="-iso-level 3"
+		fi
 	fi
 
 	if [ "${PCBIOS}" = "1" ] && [ "${EFI}" != "1" ] ; then
@@ -227,6 +230,12 @@ build_fat_img() {
 		FATSIZE="-F 32"
 	fi
 
+	# mkdosfs will fail if ${FATIMG} exists. Since we are creating an
+	# new image, it is safe to delete any previous image.
+	if [ -e ${FATIMG} ]; then
+		rm ${FATIMG}
+	fi
+
 	if [ -z "${HDDIMG_ID}" ]; then
 		mkdosfs ${FATSIZE} -n ${BOOTIMG_VOLUME_ID} -S 512 -C ${FATIMG} \
 			${BLOCKS}
@@ -287,8 +296,8 @@ python do_bootimg() {
     bb.build.exec_func('build_iso', d)
 }
 
-IMAGE_TYPEDEP_iso = "ext3"
-IMAGE_TYPEDEP_hddimg = "ext3"
+IMAGE_TYPEDEP_iso = "ext4"
+IMAGE_TYPEDEP_hddimg = "ext4"
 IMAGE_TYPES_MASKED += "iso hddimg"
 
 addtask bootimg before do_build

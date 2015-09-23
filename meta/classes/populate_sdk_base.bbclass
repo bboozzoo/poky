@@ -1,4 +1,4 @@
-inherit meta toolchain-scripts
+inherit meta
 
 # Wildcards specifying complementary packages to install for every package that has been explicitly
 # installed into the rootfs
@@ -51,9 +51,11 @@ PID = "${@os.getpid()}"
 EXCLUDE_FROM_WORLD = "1"
 
 SDK_PACKAGING_FUNC ?= "create_shar"
+SDK_PRE_INSTALL_COMMAND ?= ""
 SDK_POST_INSTALL_COMMAND ?= ""
 SDK_RELOCATE_AFTER_INSTALL ?= "1"
 
+SDKEXTPATH ?= "~/${@d.getVar('DISTRO', True)}_sdk"
 SDK_TITLE ?= "${@d.getVar('DISTRO_NAME', True) or d.getVar('DISTRO', True)} SDK"
 
 SDK_TARGET_MANIFEST = "${SDK_DEPLOY}/${TOOLCHAIN_OUTPUTNAME}.target.manifest"
@@ -78,6 +80,11 @@ python write_host_sdk_manifest () {
 
 POPULATE_SDK_POST_TARGET_COMMAND_append = " write_target_sdk_manifest ; "
 POPULATE_SDK_POST_HOST_COMMAND_append = " write_host_sdk_manifest; "
+
+# Some archs override this, we need the nativesdk version
+# turns out this is hard to get from the datastore due to TRANSLATED_TARGET_ARCH
+# manipulation.
+SDK_OLDEST_KERNEL = "2.6.32"
 
 fakeroot python do_populate_sdk() {
     from oe.sdk import populate_sdk
@@ -134,23 +141,31 @@ fakeroot create_shar() {
 	# copy in the template shar extractor script
 	cp ${COREBASE}/meta/files/toolchain-shar-extract.sh ${SDK_DEPLOY}/${TOOLCHAIN_OUTPUTNAME}.sh
 
-	rm -f ${T}/post_install_command
+	rm -f ${T}/pre_install_command ${T}/post_install_command
 
 	if [ ${SDK_RELOCATE_AFTER_INSTALL} -eq 1 ] ; then
 		cp ${COREBASE}/meta/files/toolchain-shar-relocate.sh ${T}/post_install_command
 	fi
+	cat << "EOF" >> ${T}/pre_install_command
+${SDK_PRE_INSTALL_COMMAND}
+EOF
+
 	cat << "EOF" >> ${T}/post_install_command
 ${SDK_POST_INSTALL_COMMAND}
 EOF
-	sed -i -e '/@SDK_POST_INSTALL_COMMAND@/r ${T}/post_install_command' ${SDK_DEPLOY}/${TOOLCHAIN_OUTPUTNAME}.sh
+	sed -i -e '/@SDK_PRE_INSTALL_COMMAND@/r ${T}/pre_install_command' \
+		-e '/@SDK_POST_INSTALL_COMMAND@/r ${T}/post_install_command' \
+		${SDK_DEPLOY}/${TOOLCHAIN_OUTPUTNAME}.sh
 
 	# substitute variables
 	sed -i -e 's#@SDK_ARCH@#${SDK_ARCH}#g' \
 		-e 's#@SDKPATH@#${SDKPATH}#g' \
-		-e 's#@OLDEST_KERNEL@#${OLDEST_KERNEL}#g' \
+		-e 's#@SDKEXTPATH@#${SDKEXTPATH}#g' \
+		-e 's#@OLDEST_KERNEL@#${SDK_OLDEST_KERNEL}#g' \
 		-e 's#@REAL_MULTIMACH_TARGET_SYS@#${REAL_MULTIMACH_TARGET_SYS}#g' \
 		-e 's#@SDK_TITLE@#${SDK_TITLE}#g' \
 		-e 's#@SDK_VERSION@#${SDK_VERSION}#g' \
+		-e '/@SDK_PRE_INSTALL_COMMAND@/d' \
 		-e '/@SDK_POST_INSTALL_COMMAND@/d' \
 		${SDK_DEPLOY}/${TOOLCHAIN_OUTPUTNAME}.sh
 

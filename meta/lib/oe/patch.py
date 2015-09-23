@@ -407,6 +407,13 @@ class GitApplyTree(PatchTree):
                     runcmd(["sh", "-c", " ".join(shellcmd)], self.dir)
                 except CmdError:
                     pass
+                # git am won't always clean up after itself, sadly, so...
+                shellcmd = ["git", "--work-tree=%s" % reporoot, "reset", "--hard", "HEAD"]
+                runcmd(["sh", "-c", " ".join(shellcmd)], self.dir)
+                # Also need to take care of any stray untracked files
+                shellcmd = ["git", "--work-tree=%s" % reporoot, "clean", "-f"]
+                runcmd(["sh", "-c", " ".join(shellcmd)], self.dir)
+
                 # Fall back to git apply
                 shellcmd = ["git", "--git-dir=%s" % reporoot, "apply", "-p%s" % patch['strippath']]
                 try:
@@ -415,7 +422,7 @@ class GitApplyTree(PatchTree):
                     # Fall back to patch
                     output = PatchTree._applypatch(self, patch, force, reverse, run)
                 # Add all files
-                shellcmd = ["git", "add", "-f", "."]
+                shellcmd = ["git", "add", "-f", "-A", "."]
                 output += runcmd(["sh", "-c", " ".join(shellcmd)], self.dir)
                 # Exclude the patches directory
                 shellcmd = ["git", "reset", "HEAD", self.patchdir]

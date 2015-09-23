@@ -18,7 +18,14 @@ swap_ratio=5
 hdnamelist=""
 live_dev_name=`cat /proc/mounts | grep ${1%/} | awk '{print $1}'`
 live_dev_name=${live_dev_name#\/dev/}
-live_dev_name=${live_dev_name%%[0-9]*}
+# Only strip the digit identifier if the device is not an mmc
+case $live_dev_name in
+    mmcblk*)
+    ;;
+    *)
+        live_dev_name=${live_dev_name%%[0-9]*}
+    ;;
+esac
 
 echo "Searching for hard drives ..."
 
@@ -36,12 +43,22 @@ for device in `ls /sys/block/`; do
         *)
             # skip the device LiveOS is on
             # Add valid hard drive name to the list
-            if [ $device != $live_dev_name -a -e /dev/$device ]; then
-                hdnamelist="$hdnamelist $device"
-            fi
+            case $device in
+                $live_dev_name*)
+                # skip the device we are running from
+                ;;
+                *)
+                    hdnamelist="$hdnamelist $device"
+                ;;
+            esac
             ;;
     esac
 done
+
+if [ -z "${hdnamelist}" ]; then
+    echo "You need another device (besides the live device /dev/${live_dev_name}) to install the image. Installation aborted."
+    exit 1
+fi
 
 TARGET_DEVICE_NAME=""
 for hdname in $hdnamelist; do
@@ -97,7 +114,11 @@ rm -f /etc/udev/scripts/mount*
 umount ${device}* 2> /dev/null || /bin/true
 
 mkdir -p /tmp
-cat /proc/mounts > /etc/mtab
+
+# Create /etc/mtab if not present
+if [ ! -e /etc/mtab ]; then
+    cat /proc/mounts > /etc/mtab
+fi
 
 disk_size=$(parted ${device} unit mb print | grep Disk | cut -d" " -f 3 | sed -e "s/MB//")
 

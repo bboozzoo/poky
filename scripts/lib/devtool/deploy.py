@@ -19,23 +19,17 @@
 import os
 import subprocess
 import logging
-from devtool import exec_fakeroot, setup_tinfoil, DevtoolError
+from devtool import exec_fakeroot, setup_tinfoil, check_workspace_recipe, DevtoolError
 
 logger = logging.getLogger('devtool')
-
-def plugin_init(pluginlist):
-    """Plugin initialization"""
-    pass
-
 
 def deploy(args, config, basepath, workspace):
     """Entry point for the devtool 'deploy' subcommand"""
     import re
     import oe.recipeutils
 
-    if not args.recipename in workspace:
-        raise DevtoolError("no recipe named %s in your workspace" %
-                           args.recipename)
+    check_workspace_recipe(workspace, args.recipename, checksrc=False)
+
     try:
         host, destdir = args.target.split(':')
     except ValueError:

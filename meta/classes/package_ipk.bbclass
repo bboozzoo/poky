@@ -188,7 +188,8 @@ python do_package_ipk () {
         debian_cmp_remap(rrecommends)
         rsuggests = bb.utils.explode_dep_versions2(localdata.getVar("RSUGGESTS", True) or "")
         debian_cmp_remap(rsuggests)
-        rprovides = bb.utils.explode_dep_versions2(localdata.getVar("RPROVIDES", True) or "")
+        # Deliberately drop version information here, not wanted/supported by ipk
+        rprovides = dict.fromkeys(bb.utils.explode_dep_versions2(localdata.getVar("RPROVIDES", True) or ""), [])
         debian_cmp_remap(rprovides)
         rreplaces = bb.utils.explode_dep_versions2(localdata.getVar("RREPLACES", True) or "")
         debian_cmp_remap(rreplaces)
@@ -249,6 +250,8 @@ python do_package_ipk () {
         bb.utils.unlockfile(lf)
 
 }
+# Otherwise allarch packages may change depending on override configuration
+do_package_ipk[vardepsexclude] = "OVERRIDES"
 
 SSTATETASKS += "do_package_write_ipk"
 do_package_write_ipk[sstate-inputdirs] = "${PKGWRITEDIRIPK}"

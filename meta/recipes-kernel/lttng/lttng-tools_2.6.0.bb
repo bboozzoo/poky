@@ -27,6 +27,8 @@ SRC_URI = "git://git.lttng.org/lttng-tools.git;branch=stable-2.6 \
            file://runtest-2.4.0.patch \
            file://extern-decls.patch \
            file://run-ptest \
+           file://lttng-tools-Fix-live-timer-calculation-error.patch \
+           file://0001-Fix-sessiond-disable-match-app-event-by-name.patch \
 	  "
 
 S = "${WORKDIR}/git"

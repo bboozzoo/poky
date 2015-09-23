@@ -66,6 +66,7 @@ Supported SRC_URI options are:
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+import errno
 import os
 import re
 import bb
@@ -137,7 +138,10 @@ class Git(FetchMethod):
                     ud.unresolvedrev[name] = ud.revisions[name]
                 ud.revisions[name] = self.latest_revision(ud, d, name)
 
-        gitsrcname = '%s%s' % (ud.host.replace(':','.'), ud.path.replace('/', '.').replace('*', '.'))
+        gitsrcname = '%s%s' % (ud.host.replace(':', '.'), ud.path.replace('/', '.').replace('*', '.'))
+        if gitsrcname.startswith('.'):
+            gitsrcname = gitsrcname[1:]
+
         # for rebaseable git repo, it is necessary to keep mirror tar ball
         # per revision, so that even the revision disappears from the
         # upstream repo in the future, the mirror will remain intact and still
@@ -178,8 +182,6 @@ class Git(FetchMethod):
     def download(self, ud, d):
         """Fetch url"""
 
-        ud.repochanged = not os.path.exists(ud.fullmirror)
-
         # If the checkout doesn't exist and the mirror tarball does, extract it
         if not os.path.exists(ud.clonedir) and os.path.exists(ud.fullmirror):
             bb.utils.mkdirhier(ud.clonedir)
@@ -217,7 +219,11 @@ class Git(FetchMethod):
             runfetchcmd(fetch_cmd, d)
             runfetchcmd("%s prune-packed" % ud.basecmd, d)
             runfetchcmd("%s pack-redundant --all | xargs -r rm" % ud.basecmd, d)
-            ud.repochanged = True
+            try:
+                os.unlink(ud.fullmirror)
+            except OSError as exc:
+                if exc.errno != errno.ENOENT:
+                    raise
         os.chdir(ud.clonedir)
         for name in ud.names:
             if not self._contains_ref(ud, d, name):
@@ -225,7 +231,7 @@ class Git(FetchMethod):
 
     def build_mirror_data(self, ud, d):
         # Generate a mirror tarball if needed
-        if ud.write_tarballs and (ud.repochanged or not os.path.exists(ud.fullmirror)):
+        if ud.write_tarballs and not os.path.exists(ud.fullmirror):
             # it's possible that this symlink points to read-only filesystem with PREMIRROR
             if os.path.islink(ud.fullmirror):
                 os.unlink(ud.fullmirror)
@@ -279,8 +285,15 @@ class Git(FetchMethod):
             if subdir != "":
                 runfetchcmd("%s read-tree %s%s" % (ud.basecmd, ud.revisions[ud.names[0]], readpathspec), d)
                 runfetchcmd("%s checkout-index -q -f -a" % ud.basecmd, d)
+            elif not ud.nobranch:
+                branchname =  ud.branches[ud.names[0]]
+                runfetchcmd("%s checkout -B %s %s" % (ud.basecmd, branchname, \
+                            ud.revisions[ud.names[0]]), d)
+                runfetchcmd("%s branch --set-upstream %s origin/%s" % (ud.basecmd, branchname, \
+                            branchname), d)
             else:
                 runfetchcmd("%s checkout %s" % (ud.basecmd, ud.revisions[ud.names[0]]), d)
+
         return True
 
     def clean(self, ud, d):
@@ -364,25 +377,28 @@ class Git(FetchMethod):
         by searching through the tags output of ls-remote, comparing
         versions and returning the highest match.
         """
-        verstring = ""
+        pupver = ('', '')
+
         tagregex = re.compile(d.getVar('GITTAGREGEX', True) or "(?P<pver>([0-9][\.|_]?)+)")
         try:
-            output = self._lsremote(ud, d, "refs/tags/*^{}")
+            output = self._lsremote(ud, d, "refs/tags/*")
         except bb.fetch2.FetchError or bb.fetch2.NetworkAccess:
-            return ""
+            return pupver
 
+        verstring = ""
+        revision = ""
         for line in output.split("\n"):
             if not line:
                 break
 
-            line = line.split("/")[-1]
+            tag_head = line.split("/")[-1]
             # Ignore non-released branches
-            m = re.search("(alpha|beta|rc|final)+", line)
+            m = re.search("(alpha|beta|rc|final)+", tag_head)
             if m:
                 continue
 
             # search for version in the line
-            tag = tagregex.search(line)
+            tag = tagregex.search(tag_head)
             if tag == None:
                 continue
 
@@ -391,9 +407,12 @@ class Git(FetchMethod):
 
             if verstring and bb.utils.vercmp(("0", tag, ""), ("0", verstring, "")) < 0:
                 continue
-            verstring = tag
 
-        return verstring
+            verstring = tag
+            revision = line.split()[0]
+            pupver = (verstring, revision)
+
+        return pupver
 
     def _build_revision(self, ud, d, name):
         return ud.revisions[name]
@@ -423,7 +442,7 @@ class Git(FetchMethod):
         else:
             return True, str(rev)
 
-    def checkstatus(self, ud, d):
+    def checkstatus(self, fetch, ud, d):
         try:
             self._lsremote(ud, d, "")
             return True

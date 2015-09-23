@@ -464,7 +464,7 @@ def uri_replace(ud, uri_find, uri_replace, replacements, d):
                 for k in replacements:
                     uri_replace_decoded[loc] = uri_replace_decoded[loc].replace(k, replacements[k])
                 #bb.note("%s %s %s" % (regexp, uri_replace_decoded[loc], uri_decoded[loc]))
-                result_decoded[loc] = re.sub(regexp, uri_replace_decoded[loc], uri_decoded[loc])
+                result_decoded[loc] = re.sub(regexp, uri_replace_decoded[loc], uri_decoded[loc], 1)
             if loc == 2:
                 # Handle path manipulations
                 basename = None
@@ -628,7 +628,7 @@ def verify_checksum(ud, d, precomputed={}):
     }
 
 
-def verify_donestamp(ud, d):
+def verify_donestamp(ud, d, origud=None):
     """
     Check whether the done stamp file has the right checksums (if the fetch
     method supports them). If it doesn't, delete the done stamp and force
@@ -640,7 +640,8 @@ def verify_donestamp(ud, d):
     if not os.path.exists(ud.donestamp):
         return False
 
-    if not ud.method.supports_checksum(ud):
+    if (not ud.method.supports_checksum(ud) or
+        (origud and not origud.method.supports_checksum(origud))):
         # done stamp exists, checksums not supported; assume the local file is
         # current
         return True
@@ -777,7 +778,7 @@ def localpath(url, d):
     fetcher = bb.fetch2.Fetch([url], d)
     return fetcher.localpath(url)
 
-def runfetchcmd(cmd, d, quiet = False, cleanup = []):
+def runfetchcmd(cmd, d, quiet=False, cleanup=None):
     """
     Run cmd returning the command output
     Raise an error if interrupted or cmd fails
@@ -801,6 +802,9 @@ def runfetchcmd(cmd, d, quiet = False, cleanup = []):
                   'GIT_SMART_HTTP',
                   'SSH_AUTH_SOCK', 'SSH_AGENT_PID',
                   'SOCKS5_USER', 'SOCKS5_PASSWD']
+
+    if not cleanup:
+        cleanup = []
 
     for var in exportvars:
         val = d.getVar(var, True)
@@ -858,7 +862,7 @@ def build_mirroruris(origud, mirrors, ld):
     replacements["BASENAME"] = origud.path.split("/")[-1]
     replacements["MIRRORNAME"] = origud.host.replace(':','.') + origud.path.replace('/', '.').replace('*', '.')
 
-    def adduri(ud, uris, uds):
+    def adduri(ud, uris, uds, mirrors):
         for line in mirrors:
             try:
                 (find, replace) = line
@@ -872,6 +876,12 @@ def build_mirroruris(origud, mirrors, ld):
                 logger.debug(1, "Mirror %s not in the list of trusted networks, skipping" %  (newuri))
                 continue
 
+            # Create a local copy of the mirrors minus the current line
+            # this will prevent us from recursively processing the same line
+            # as well as indirect recursion A -> B -> C -> A
+            localmirrors = list(mirrors)
+            localmirrors.remove(line)
+
             try:
                 newud = FetchData(newuri, ld)
                 newud.setup_localpath(ld)
@@ -881,16 +891,16 @@ def build_mirroruris(origud, mirrors, ld):
                 try:
                     # setup_localpath of file:// urls may fail, we should still see 
                     # if mirrors of the url exist
-                    adduri(newud, uris, uds)
+                    adduri(newud, uris, uds, localmirrors)
                 except UnboundLocalError:
                     pass
                 continue   
             uris.append(newuri)
             uds.append(newud)
 
-            adduri(newud, uris, uds)
+            adduri(newud, uris, uds, localmirrors)
 
-    adduri(origud, uris, uds)
+    adduri(origud, uris, uds, mirrors)
 
     return uris, uds
 
@@ -907,19 +917,19 @@ def rename_bad_checksum(ud, suffix):
     bb.utils.movefile(ud.localpath, new_localpath)
 
 
-def try_mirror_url(origud, ud, ld, check = False):
+def try_mirror_url(fetch, origud, ud, ld, check = False):
     # Return of None or a value means we're finished
     # False means try another url
     try:
         if check:
-            found = ud.method.checkstatus(ud, ld)
+            found = ud.method.checkstatus(fetch, ud, ld)
             if found:
                 return found
             return False
 
         os.chdir(ld.getVar("DL_DIR", True))
 
-        if not verify_donestamp(ud, ld) or ud.method.need_update(ud, ld):
+        if not verify_donestamp(ud, ld, origud) or ud.method.need_update(ud, ld):
             ud.method.download(ud, ld)
             if hasattr(ud.method,"build_mirror_data"):
                 ud.method.build_mirror_data(ud, ld)
@@ -975,7 +985,7 @@ def try_mirror_url(origud, ud, ld, check = False):
             pass
         return False
 
-def try_mirrors(d, origud, mirrors, check = False):
+def try_mirrors(fetch, d, origud, mirrors, check = False):
     """
     Try to use a mirrored version of the sources.
     This method will be automatically called before the fetchers go.
@@ -989,7 +999,7 @@ def try_mirrors(d, origud, mirrors, check = False):
     uris, uds = build_mirroruris(origud, mirrors, ld)
 
     for index, uri in enumerate(uris):
-        ret = try_mirror_url(origud, uds[index], ld, check)
+        ret = try_mirror_url(fetch, origud, uds[index], ld, check)
         if ret != False:
             return ret
     return None
@@ -1267,7 +1277,7 @@ class FetchData(object):
 class FetchMethod(object):
     """Base class for 'fetch'ing data"""
 
-    def __init__(self, urls = []):
+    def __init__(self, urls=None):
         self.urls = []
 
     def supports(self, urldata, d):
@@ -1473,7 +1483,7 @@ class FetchMethod(object):
         """
         return True
 
-    def checkstatus(self, urldata, d):
+    def checkstatus(self, fetch, urldata, d):
         """
         Check the status of a URL
         Assumes localpath was called first
@@ -1505,7 +1515,7 @@ class FetchMethod(object):
         return "%s-%s" % (key, d.getVar("PN", True) or "")
 
 class Fetch(object):
-    def __init__(self, urls, d, cache = True, localonly = False):
+    def __init__(self, urls, d, cache = True, localonly = False, connection_cache = None):
         if localonly and cache:
             raise Exception("bb.fetch2.Fetch.__init__: cannot set cache and localonly at same time")
 
@@ -1514,6 +1524,7 @@ class Fetch(object):
         self.urls = urls
         self.d = d
         self.ud = {}
+        self.connection_cache = connection_cache
 
         fn = d.getVar('FILE', True)
         if cache and fn and fn in urldata_cache:
@@ -1551,11 +1562,11 @@ class Fetch(object):
 
         return local
 
-    def download(self, urls = []):
+    def download(self, urls=None):
         """
         Fetch all urls
         """
-        if len(urls) == 0:
+        if not urls:
             urls = self.urls
 
         network = self.d.getVar("BB_NO_NETWORK", True)
@@ -1577,7 +1588,7 @@ class Fetch(object):
                 elif m.try_premirror(ud, self.d):
                     logger.debug(1, "Trying PREMIRRORS")
                     mirrors = mirror_from_string(self.d.getVar('PREMIRRORS', True))
-                    localpath = try_mirrors(self.d, ud, mirrors, False)
+                    localpath = try_mirrors(self, self.d, ud, mirrors, False)
 
                 if premirroronly:
                     self.d.setVar("BB_NO_NETWORK", "1")
@@ -1585,7 +1596,8 @@ class Fetch(object):
                 os.chdir(self.d.getVar("DL_DIR", True))
 
                 firsterr = None
-                if not localpath and ((not verify_donestamp(ud, self.d)) or m.need_update(ud, self.d)):
+                verified_stamp = verify_donestamp(ud, self.d)
+                if not localpath and (not verified_stamp or m.need_update(ud, self.d)):
                     try:
                         if not trusted_network(self.d, ud.url):
                             raise UntrustedUrl(ud.url)
@@ -1613,10 +1625,11 @@ class Fetch(object):
                             logger.debug(1, str(e))
                         firsterr = e
                         # Remove any incomplete fetch
-                        m.clean(ud, self.d)
+                        if not verified_stamp:
+                            m.clean(ud, self.d)
                         logger.debug(1, "Trying MIRRORS")
                         mirrors = mirror_from_string(self.d.getVar('MIRRORS', True))
-                        localpath = try_mirrors (self.d, ud, mirrors)
+                        localpath = try_mirrors(self, self.d, ud, mirrors)
 
                 if not localpath or ((not os.path.exists(localpath)) and localpath.find("*") == -1):
                     if firsterr:
@@ -1633,12 +1646,12 @@ class Fetch(object):
             finally:
                 bb.utils.unlockfile(lf)
 
-    def checkstatus(self, urls = []):
+    def checkstatus(self, urls=None):
         """
         Check all urls exist upstream
         """
 
-        if len(urls) == 0:
+        if not urls:
             urls = self.urls
 
         for u in urls:
@@ -1648,25 +1661,25 @@ class Fetch(object):
             logger.debug(1, "Testing URL %s", u)
             # First try checking uri, u, from PREMIRRORS
             mirrors = mirror_from_string(self.d.getVar('PREMIRRORS', True))
-            ret = try_mirrors(self.d, ud, mirrors, True)
+            ret = try_mirrors(self, self.d, ud, mirrors, True)
             if not ret:
                 # Next try checking from the original uri, u
                 try:
-                    ret = m.checkstatus(ud, self.d)
+                    ret = m.checkstatus(self, ud, self.d)
                 except:
                     # Finally, try checking uri, u, from MIRRORS
                     mirrors = mirror_from_string(self.d.getVar('MIRRORS', True))
-                    ret = try_mirrors(self.d, ud, mirrors, True)
+                    ret = try_mirrors(self, self.d, ud, mirrors, True)
 
             if not ret:
                 raise FetchError("URL %s doesn't work" % u, u)
 
-    def unpack(self, root, urls = []):
+    def unpack(self, root, urls=None):
         """
         Check all urls exist upstream
         """
 
-        if len(urls) == 0:
+        if not urls:
             urls = self.urls
 
         for u in urls:
@@ -1684,12 +1697,12 @@ class Fetch(object):
             if ud.lockfile:
                 bb.utils.unlockfile(lf)
 
-    def clean(self, urls = []):
+    def clean(self, urls=None):
         """
         Clean files that the fetcher gets or places
         """
 
-        if len(urls) == 0:
+        if not urls:
             urls = self.urls
 
         for url in urls:
@@ -1710,6 +1723,42 @@ class Fetch(object):
 
             if ud.lockfile:
                 bb.utils.unlockfile(lf)
+
+class FetchConnectionCache(object):
+    """
+        A class which represents an container for socket connections.
+    """
+    def __init__(self):
+        self.cache = {}
+
+    def get_connection_name(self, host, port):
+        return host + ':' + str(port)
+
+    def add_connection(self, host, port, connection):
+        cn = self.get_connection_name(host, port)
+
+        if cn not in self.cache:
+            self.cache[cn] = connection
+
+    def get_connection(self, host, port):
+        connection = None
+
+        cn = self.get_connection_name(host, port)
+        if cn in self.cache:
+            connection = self.cache[cn]
+
+        return connection
+
+    def remove_connection(self, host, port):
+        cn = self.get_connection_name(host, port)
+        if cn in self.cache:
+            self.cache[cn].close()
+            del self.cache[cn]
+
+    def close_connections(self):
+        for cn in self.cache.keys():
+            self.cache[cn].close()
+            del self.cache[cn]
 
 from . import cvs
 from . import git

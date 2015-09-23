@@ -11,6 +11,7 @@
 #  -Check if packages contains .debug directories or .so files
 #   where they should be in -dev or -dbg
 #  -Check if config.log contains traces to broken autoconf tests
+#  -Check invalid characters (non-utf8) on some package metadata
 #  -Ensure that binaries in base_[bindir|sbindir|libdir] do not link
 #   into exec_prefix
 #  -Check that scripts in base_[bindir|sbindir|libdir] do not reference
@@ -31,12 +32,16 @@ WARN_QA ?= "ldflags useless-rpaths rpaths staticdev libdir xorg-driver-abi \
             installed-vs-shipped compile-host-path install-host-path \
             pn-overrides infodir build-deps file-rdeps \
             unknown-configure-option symlink-to-sysroot multilib \
+            invalid-pkgconfig host-user-contaminated \
             "
 ERROR_QA ?= "dev-so debug-deps dev-deps debug-files arch pkgconfig la \
             perms dep-cmp pkgvarcheck perm-config perm-line perm-link \
             split-strip packages-list pkgv-undefined var-undefined \
-            version-going-backwards expanded-d \
+            version-going-backwards expanded-d invalid-chars \
             "
+FAKEROOT_QA = "host-user-contaminated"
+FAKEROOT_QA[doc] = "QA tests which need to run under fakeroot. If any \
+enabled tests are listed here, the do_package_qa task will run under fakeroot."
 
 ALL_QA = "${WARN_QA} ${ERROR_QA}"
 
@@ -81,6 +86,7 @@ def package_qa_get_machine_dict():
                         "mipsel":     ( 8,     0,    0,          True,          32),
                         "mips64":     ( 8,     0,    0,          False,         64),
                         "mips64el":   ( 8,     0,    0,          True,          64),
+                        "nios2":      (113,    0,    0,          True,          32),
                         "s390":       (22,     0,    0,          False,         32),
                         "sh4":        (42,     0,    0,          True,          32),
                         "sparc":      ( 2,     0,    0,          False,         32),
@@ -259,7 +265,7 @@ def package_qa_check_dev(path, name, d, elf, messages):
     """
 
     if not name.endswith("-dev") and not name.endswith("-dbg") and not name.endswith("-ptest") and not name.startswith("nativesdk-") and path.endswith(".so") and os.path.islink(path):
-        messages["dev-so"] = "non -dev/-dbg/-nativesdk package contains symlink .so: %s path '%s'" % \
+        messages["dev-so"] = "non -dev/-dbg/nativesdk- package contains symlink .so: %s path '%s'" % \
                  (name, package_qa_clean_path(path,d))
 
 QAPATHTEST[staticdev] = "package_qa_check_staticdev"
@@ -946,6 +952,59 @@ def package_qa_check_expanded_d(path,name,d,elf,messages):
                         sane = False
     return sane
 
+def package_qa_check_encoding(keys, encode, d):
+    def check_encoding(key,enc):
+        sane = True
+        value = d.getVar(key, True)
+        if value:
+            try:
+                s = unicode(value, enc)
+            except UnicodeDecodeError as e:
+                error_msg = "%s has non %s characters" % (key,enc)
+                sane = False
+                package_qa_handle_error("invalid-chars", error_msg, d)
+        return sane
+
+    for key in keys:
+        sane = check_encoding(key, encode)
+        if not sane:
+            break
+
+HOST_USER_UID := "${@os.getuid()}"
+HOST_USER_GID := "${@os.getgid()}"
+
+QAPATHTEST[host-user-contaminated] = "package_qa_check_host_user"
+def package_qa_check_host_user(path, name, d, elf, messages):
+    """Check for paths outside of /home which are owned by the user running bitbake."""
+
+    if not os.path.lexists(path):
+        return
+
+    dest = d.getVar('PKGDEST', True)
+    pn = d.getVar('PN', True)
+    home = os.path.join(dest, 'home')
+    if path == home or path.startswith(home + os.sep):
+        return
+
+    try:
+        stat = os.lstat(path)
+    except OSError as exc:
+        import errno
+        if exc.errno != errno.ENOENT:
+            raise
+    else:
+        rootfs_path = path[len(dest):]
+        check_uid = int(d.getVar('HOST_USER_UID', True))
+        if stat.st_uid == check_uid:
+            messages["host-user-contaminated"] = "%s: %s is owned by uid %d, which is the same as the user running bitbake. This may be due to host contamination" % (pn, rootfs_path, check_uid)
+            return False
+
+        check_gid = int(d.getVar('HOST_USER_GID', True))
+        if stat.st_gid == check_gid:
+            messages["host-user-contaminated"] = "%s: %s is owned by gid %d, which is the same as the user running bitbake. This may be due to host contamination" % (pn, rootfs_path, check_gid)
+            return False
+    return True
+
 # The PACKAGE FUNC to scan each package
 python do_package_qa () {
     import subprocess
@@ -954,6 +1013,9 @@ python do_package_qa () {
     bb.note("DO PACKAGE QA")
 
     bb.build.exec_func("read_subpackage_metadata", d)
+
+    # Check non UTF-8 characters on recipe's metadata
+    package_qa_check_encoding(['DESCRIPTION', 'SUMMARY', 'LICENSE', 'SECTION'], 'utf-8', d)
 
     logdir = d.getVar('T', True)
     pkg = d.getVar('PN', True)
@@ -1030,7 +1092,7 @@ python do_package_qa () {
         # Check package name
         if not pkgname_pattern.match(package):
             package_qa_handle_error("pkgname",
-                    "%s doesn't match the [a-z0-9.+-]+ regex\n" % package, d)
+                    "%s doesn't match the [a-z0-9.+-]+ regex" % package, d)
 
         path = "%s/%s" % (pkgdest, package)
         if not package_qa_walk(path, warnchecks, errorchecks, skip, package, d):
@@ -1139,7 +1201,26 @@ Missing inherit gettext?""" % (gt, config))
                 package_qa_handle_error("unknown-configure-option", error_msg, d)
         except subprocess.CalledProcessError:
             pass
+
+    # Check invalid PACKAGECONFIG
+    pkgconfig = (d.getVar("PACKAGECONFIG", True) or "").split()
+    if pkgconfig:
+        pkgconfigflags = d.getVarFlags("PACKAGECONFIG") or {}
+        for pconfig in pkgconfig:
+            if pconfig not in pkgconfigflags:
+                pn = d.getVar('PN', True)
+                error_msg = "%s: invalid PACKAGECONFIG: %s" % (pn, pconfig)
+                package_qa_handle_error("invalid-pkgconfig", error_msg, d)
 }
+
+python do_qa_unpack() {
+    bb.note("Checking has ${S} been created")
+
+    s_dir = d.getVar('S', True)
+    if not os.path.exists(s_dir):
+        bb.warn('%s: the directory %s (%s) pointed to by the S variable doesn\'t exist - please set S within the recipe to point to where the source has been unpacked to' % (d.getVar('PN', True), d.getVar('S', False), s_dir))
+}
+
 # The Staging Func, to check all staging
 #addtask qa_staging after do_populate_sysroot before do_build
 do_populate_sysroot[postfuncs] += "do_qa_staging "
@@ -1148,6 +1229,9 @@ do_populate_sysroot[postfuncs] += "do_qa_staging "
 # have it in DEPENDS and for correct LIC_FILES_CHKSUM
 #addtask qa_configure after do_configure before do_compile
 do_configure[postfuncs] += "do_qa_configure "
+
+# Check does S exist.
+do_unpack[postfuncs] += "do_qa_unpack"
 
 python () {
     tests = d.getVar('ALL_QA', True).split()
@@ -1187,6 +1271,11 @@ python () {
         for var in 'RDEPENDS', 'RRECOMMENDS', 'RSUGGESTS', 'RCONFLICTS', 'RPROVIDES', 'RREPLACES', 'FILES', 'pkg_preinst', 'pkg_postinst', 'pkg_prerm', 'pkg_postrm', 'ALLOW_EMPTY':
             if d.getVar(var, False):
                 issues.append(var)
+
+        fakeroot_tests = d.getVar('FAKEROOT_QA', True).split()
+        if set(tests) & set(fakeroot_tests):
+            d.setVarFlag('do_package_qa', 'fakeroot', '1')
+            d.appendVarFlag('do_package_qa', 'depends', ' virtual/fakeroot-native:do_populate_sysroot')
     else:
         d.setVarFlag('do_package_qa', 'rdeptask', '')
     for i in issues:

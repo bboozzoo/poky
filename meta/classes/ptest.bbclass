@@ -43,9 +43,13 @@ do_install_ptest_base() {
             oe_runmake DESTDIR=${D}${PTEST_PATH} install-ptest
         fi
         do_install_ptest
+        chown -R root:root ${D}${PTEST_PATH}
     fi
 }
 
+do_configure_ptest_base[dirs] = "${B}"
+do_compile_ptest_base[dirs] = "${B}"
+do_install_ptest_base[dirs] = "${B}"
 do_install_ptest_base[cleandirs] = "${D}${PTEST_PATH}"
 
 addtask configure_ptest_base after do_configure before do_compile

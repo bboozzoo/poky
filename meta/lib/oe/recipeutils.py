@@ -72,6 +72,8 @@ def parse_recipe_simple(cooker, pn, d, appends=True):
             raise bb.providers.NoProvider('Unable to find any recipe file matching %s' % pn)
     if appends:
         appendfiles = cooker.collection.get_file_appends(recipefile)
+    else:
+        appendfiles = None
     return parse_recipe(recipefile, appendfiles, d)
 
 
@@ -79,10 +81,9 @@ def get_var_files(fn, varlist, d):
     """Find the file in which each of a list of variables is set.
     Note: requires variable history to be enabled when parsing.
     """
-    envdata = parse_recipe(fn, [], d)
     varfiles = {}
     for v in varlist:
-        history = envdata.varhistory.variable(v)
+        history = d.varhistory.variable(v)
         files = []
         for event in history:
             if 'file' in event and not 'flag' in event:
@@ -94,6 +95,63 @@ def get_var_files(fn, varlist, d):
         varfiles[v] = actualfile
 
     return varfiles
+
+
+def split_var_value(value, assignment=True):
+    """
+    Split a space-separated variable's value into a list of items,
+    taking into account that some of the items might be made up of
+    expressions containing spaces that should not be split.
+    Parameters:
+        value:
+            The string value to split
+        assignment:
+            True to assume that the value represents an assignment
+            statement, False otherwise. If True, and an assignment
+            statement is passed in the first item in
+            the returned list will be the part of the assignment
+            statement up to and including the opening quote character,
+            and the last item will be the closing quote.
+    """
+    inexpr = 0
+    lastchar = None
+    out = []
+    buf = ''
+    for char in value:
+        if char == '{':
+            if lastchar == '$':
+                inexpr += 1
+        elif char == '}':
+            inexpr -= 1
+        elif assignment and char in '"\'' and inexpr == 0:
+            if buf:
+                out.append(buf)
+            out.append(char)
+            char = ''
+            buf = ''
+        elif char.isspace() and inexpr == 0:
+            char = ''
+            if buf:
+                out.append(buf)
+            buf = ''
+        buf += char
+        lastchar = char
+    if buf:
+        out.append(buf)
+
+    # Join together assignment statement and opening quote
+    outlist = out
+    if assignment:
+        assigfound = False
+        for idx, item in enumerate(out):
+            if '=' in item:
+                assigfound = True
+            if assigfound:
+                if '"' in item or "'" in item:
+                    outlist = [' '.join(out[:idx+1])]
+                    outlist.extend(out[idx+1:])
+                    break
+    return outlist
 
 
 def patch_recipe_file(fn, values, patch=False, relpath=''):
@@ -113,7 +171,7 @@ def patch_recipe_file(fn, values, patch=False, relpath=''):
             if name in nowrap_vars:
                 tf.write(rawtext)
             elif name in list_vars:
-                splitvalue = values[name].split()
+                splitvalue = split_var_value(values[name], assignment=False)
                 if len(splitvalue) > 1:
                     linesplit = ' \\\n' + (' ' * (len(name) + 4))
                     tf.write('%s = "%s%s"\n' % (name, linesplit.join(splitvalue), linesplit))
@@ -519,7 +577,7 @@ def bbappend_recipe(rd, destlayerdir, srcfiles, install=None, wildcardver=False,
                             instfunclines.append(line)
                     return (instfunclines, None, 4, False)
             else:
-                splitval = origvalue.split()
+                splitval = split_var_value(origvalue, assignment=False)
                 changed = False
                 removevar = varname
                 if varname in ['SRC_URI', 'SRC_URI_append%s' % appendoverride]:
@@ -617,10 +675,11 @@ def find_layerdir(fn):
 def replace_dir_vars(path, d):
     """Replace common directory paths with appropriate variable references (e.g. /etc becomes ${sysconfdir})"""
     dirvars = {}
-    for var in d:
+    # Sort by length so we get the variables we're interested in first
+    for var in sorted(d.keys(), key=len):
         if var.endswith('dir') and var.lower() == var:
             value = d.getVar(var, True)
-            if value.startswith('/') and not '\n' in value:
+            if value.startswith('/') and not '\n' in value and value not in dirvars:
                 dirvars[value] = var
     for dirpath in sorted(dirvars.keys(), reverse=True):
         path = path.replace(dirpath, '${%s}' % dirvars[dirpath])
@@ -637,13 +696,19 @@ def get_recipe_pv_without_srcpv(pv, uri_type):
     sfx = ''
 
     if uri_type == 'git':
-        git_regex = re.compile("(?P<pfx>(v|))(?P<ver>((\d+[\.\-_]*)+))(?P<sfx>(\+|)(git|)(r|)(AUTOINC|)(\+|))(?P<rev>.*)")
+        git_regex = re.compile("(?P<pfx>v?)(?P<ver>[^\+]*)((?P<sfx>\+(git)?r?(AUTOINC\+))(?P<rev>.*))?")
         m = git_regex.match(pv)
 
         if m:
             pv = m.group('ver')
             pfx = m.group('pfx')
             sfx = m.group('sfx')
+    else:
+        regex = re.compile("(?P<pfx>(v|r)?)(?P<ver>.*)")
+        m = regex.match(pv)
+        if m:
+            pv = m.group('ver')
+            pfx = m.group('pfx')
 
     return (pv, pfx, sfx)
 
@@ -667,8 +732,17 @@ def get_recipe_upstream_version(rd):
     ru['type'] = 'U'
     ru['datetime'] = ''
 
+    # XXX: If don't have SRC_URI means that don't have upstream sources so
+    # returns 1.0.
+    src_uris = rd.getVar('SRC_URI', True)
+    if not src_uris:
+        ru['version'] = '1.0'
+        ru['type'] = 'M'
+        ru['datetime'] = datetime.now()
+        return ru
+
     # XXX: we suppose that the first entry points to the upstream sources
-    src_uri = rd.getVar('SRC_URI', True).split()[0] 
+    src_uri = src_uris.split()[0]
     uri_type, _, _, _, _, _ =  decodeurl(src_uri)
 
     pv = rd.getVar('PV', True)
@@ -694,21 +768,30 @@ def get_recipe_upstream_version(rd):
     else:
         ud = bb.fetch2.FetchData(src_uri, rd)
         pupver = ud.method.latest_versionstring(ud, rd)
+        (upversion, revision) = pupver
 
+        # format git version version+gitAUTOINC+HASH
         if uri_type == 'git':
             (pv, pfx, sfx) = get_recipe_pv_without_srcpv(pv, uri_type)
 
-            latest_revision = ud.method.latest_revision(ud, rd, ud.names[0])
+            # if contains revision but not upversion use current pv
+            if upversion == '' and revision:
+                upversion = pv
 
-            # if contains revision but not pupver use current pv
-            if pupver == '' and latest_revision:
-                pupver = pv
+            if upversion:
+                tmp = upversion
+                upversion = ''
 
-            if pupver != '':
-                pupver = pfx + pupver + sfx + latest_revision[:10]
+                if pfx:
+                    upversion = pfx + tmp
+                else:
+                    upversion = tmp
 
-        if pupver != '':
-            ru['version'] = pupver
+                if sfx:
+                    upversion = upversion + sfx + revision[:10]
+
+        if upversion:
+            ru['version'] = upversion
             ru['type'] = 'A'
 
         ru['datetime'] = datetime.now()
