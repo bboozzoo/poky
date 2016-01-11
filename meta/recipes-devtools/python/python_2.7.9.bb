@@ -26,6 +26,7 @@ SRC_URI += "\
   file://parallel-makeinst-create-bindir.patch \
   file://use_sysroot_ncurses_instead_of_host.patch \
   file://avoid_parallel_make_races_on_pgen.patch \
+  file://add-CROSSPYTHONPATH-for-PYTHON_FOR_BUILD.patch \
 "
 
 S = "${WORKDIR}/Python-${PV}"
@@ -33,11 +34,6 @@ S = "${WORKDIR}/Python-${PV}"
 inherit autotools multilib_header python-dir pythonnative
 
 CONFIGUREOPTS += " --with-system-ffi "
-
-# The 3 lines below are copied from the libffi recipe, ctypes ships its own copy of the libffi sources
-#Somehow gcc doesn't set __SOFTFP__ when passing -mfloatabi=softp :(
-TARGET_CC_ARCH_append_armv6 = " -D__SOFTFP__"
-TARGET_CC_ARCH_append_armv7a = " -D__SOFTFP__"
 
 # The following is a hack until we drop ac_cv_sizeof_off_t from site files
 EXTRA_OECONF += "${@bb.utils.contains('DISTRO_FEATURES', 'largefile', 'ac_cv_sizeof_off_t=8', '', d)} ac_cv_file__dev_ptmx=yes ac_cv_file__dev_ptc=no"
@@ -154,9 +150,6 @@ RRECOMMENDS_${PN}-crypt = "openssl"
 # package libpython2
 PACKAGES =+ "lib${BPN}2"
 FILES_lib${BPN}2 = "${libdir}/libpython*.so.*"
-
-# catch debug extensions (isn't that already in python-core-dbg?)
-FILES_${PN}-dbg += "${libdir}/python${PYTHON_MAJMIN}/lib-dynload/.debug"
 
 # catch all the rest (unsorted)
 PACKAGES += "${PN}-misc"

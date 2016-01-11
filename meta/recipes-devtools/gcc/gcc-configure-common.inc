@@ -47,6 +47,7 @@ EXTRA_OECONF = "\
     ${EXTRA_OECONF_GCC_FLOAT} \
     ${EXTRA_OECONF_PATHS} \
     ${@get_gcc_mips_plt_setting(bb, d)} \
+    ${@get_gcc_ppc_plt_settings(bb, d)} \
     ${@get_long_double_setting(bb, d)} \
     ${@get_gcc_multiarch_setting(bb, d)} \
 "
@@ -71,6 +72,8 @@ EXTRA_OECONF_append_mips64eln32 = " --with-abi=64 --with-arch-64=mips64 --with-t
 # features used in OE.
 EXTRA_OECONF_append_armv6 = " --with-arch=armv6"
 EXTRA_OECONF_append_armv7a = " --with-arch=armv7-a"
+EXTRA_OECONF_append_armv7m = " --with-arch=armv7-m"
+EXTRA_OECONF_append_armv7r = " --with-arch=armv7-r"
 
 EXTRA_OECONF_GCC_FLOAT ??= ""
 CPPFLAGS = ""

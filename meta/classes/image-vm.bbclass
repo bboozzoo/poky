@@ -10,7 +10,7 @@ do_bootdirectdisk[depends] += "${@'${INITRD_IMAGE}:do_rootfs' if '${INITRD_IMAGE
 
 # need to define the dependency and the ROOTFS for directdisk
 do_bootdirectdisk[depends] += "${PN}:do_rootfs"
-ROOTFS ?= "${DEPLOY_DIR_IMAGE}/${IMAGE_BASENAME}-${MACHINE}.ext4"
+ROOTFS ?= "${DEPLOY_DIR_IMAGE}/${IMAGE_LINK_NAME}.ext4"
 
 # creating VM images relies on having a hddimg so ensure we inherit it here.
 inherit boot-directdisk
@@ -18,7 +18,8 @@ inherit boot-directdisk
 IMAGE_TYPEDEP_vmdk = "ext4"
 IMAGE_TYPEDEP_vdi = "ext4"
 IMAGE_TYPEDEP_qcow2 = "ext4"
-IMAGE_TYPES_MASKED += "vmdk vdi qcow2"
+IMAGE_TYPEDEP_hdddirect = "ext4"
+IMAGE_TYPES_MASKED += "vmdk vdi qcow2 hdddirect"
 
 create_vmdk_image () {
     qemu-img convert -O vmdk ${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.hdddirect ${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.vmdk

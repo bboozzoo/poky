@@ -23,9 +23,12 @@ import shutil
 import tempfile
 import logging
 import argparse
+import argparse_oe
 import scriptutils
 import errno
-from devtool import exec_build_env_command, setup_tinfoil, check_workspace_recipe, use_external_build, setup_git_repo, DevtoolError
+import glob
+from collections import OrderedDict
+from devtool import exec_build_env_command, setup_tinfoil, check_workspace_recipe, use_external_build, setup_git_repo, recipe_to_append, DevtoolError
 from devtool import parse_recipe
 
 logger = logging.getLogger('devtool')
@@ -36,17 +39,62 @@ def add(args, config, basepath, workspace):
     import bb
     import oe.recipeutils
 
-    if args.recipename in workspace:
-        raise DevtoolError("recipe %s is already in your workspace" %
-                            args.recipename)
+    if not args.recipename and not args.srctree and not args.fetch and not args.fetchuri:
+        raise argparse_oe.ArgumentUsageError('At least one of recipename, srctree, fetchuri or -f/--fetch must be specified', 'add')
 
-    reason = oe.recipeutils.validate_pn(args.recipename)
-    if reason:
-        raise DevtoolError(reason)
+    # These are positional arguments, but because we're nice, allow
+    # specifying e.g. source tree without name, or fetch URI without name or
+    # source tree (if we can detect that that is what the user meant)
+    if '://' in args.recipename:
+        if not args.fetchuri:
+            if args.fetch:
+                raise DevtoolError('URI specified as positional argument as well as -f/--fetch')
+            args.fetchuri = args.recipename
+            args.recipename = ''
+    elif '://' in args.srctree:
+        if not args.fetchuri:
+            if args.fetch:
+                raise DevtoolError('URI specified as positional argument as well as -f/--fetch')
+            args.fetchuri = args.srctree
+            args.srctree = ''
+    elif args.recipename and not args.srctree:
+        if os.sep in args.recipename:
+            args.srctree = args.recipename
+            args.recipename = None
+        elif os.path.isdir(args.recipename):
+            logger.warn('Ambiguous argument %s - assuming you mean it to be the recipe name')
 
-    srctree = os.path.abspath(args.srctree)
-    if os.path.exists(srctree):
-        if args.fetch:
+    if args.fetch:
+        if args.fetchuri:
+            raise DevtoolError('URI specified as positional argument as well as -f/--fetch')
+        else:
+            # FIXME should show a warning that -f/--fetch is deprecated here
+            args.fetchuri = args.fetch
+
+    if args.recipename:
+        if args.recipename in workspace:
+            raise DevtoolError("recipe %s is already in your workspace" %
+                               args.recipename)
+        reason = oe.recipeutils.validate_pn(args.recipename)
+        if reason:
+            raise DevtoolError(reason)
+
+        # FIXME this ought to be in validate_pn but we're using that in other contexts
+        if '/' in args.recipename:
+            raise DevtoolError('"/" is not a valid character in recipe names')
+
+    if args.srctree:
+        srctree = os.path.abspath(args.srctree)
+        srctreeparent = None
+        tmpsrcdir = None
+    else:
+        srctree = None
+        srctreeparent = get_default_srctree(config)
+        bb.utils.mkdirhier(srctreeparent)
+        tmpsrcdir = tempfile.mkdtemp(prefix='devtoolsrc', dir=srctreeparent)
+
+    if srctree and os.path.exists(srctree):
+        if args.fetchuri:
             if not os.path.isdir(srctree):
                 raise DevtoolError("Cannot fetch into source tree path %s as "
                                    "it exists and is not a directory" %
@@ -55,53 +103,95 @@ def add(args, config, basepath, workspace):
                 raise DevtoolError("Cannot fetch into source tree path %s as "
                                    "it already exists and is non-empty" %
                                    srctree)
-    elif not args.fetch:
-        raise DevtoolError("Specified source tree %s could not be found" %
-                           srctree)
+    elif not args.fetchuri:
+        if args.srctree:
+            raise DevtoolError("Specified source tree %s could not be found" %
+                               args.srctree)
+        elif srctree:
+            raise DevtoolError("No source tree exists at default path %s - "
+                               "either create and populate this directory, "
+                               "or specify a path to a source tree, or a "
+                               "URI to fetch source from" % srctree)
+        else:
+            raise DevtoolError("You must either specify a source tree "
+                               "or a URI to fetch source from")
 
-    appendpath = os.path.join(config.workspace_path, 'appends')
-    if not os.path.exists(appendpath):
-        os.makedirs(appendpath)
-
-    recipedir = os.path.join(config.workspace_path, 'recipes', args.recipename)
-    bb.utils.mkdirhier(recipedir)
-    rfv = None
     if args.version:
         if '_' in args.version or ' ' in args.version:
             raise DevtoolError('Invalid version string "%s"' % args.version)
-        rfv = args.version
-    if args.fetch:
-        if args.fetch.startswith('git://'):
-            rfv = 'git'
-        elif args.fetch.startswith('svn://'):
-            rfv = 'svn'
-        elif args.fetch.startswith('hg://'):
-            rfv = 'hg'
-    if rfv:
-        bp = "%s_%s" % (args.recipename, rfv)
-    else:
-        bp = args.recipename
-    recipefile = os.path.join(recipedir, "%s.bb" % bp)
+
     if args.color == 'auto' and sys.stdout.isatty():
         color = 'always'
     else:
         color = args.color
     extracmdopts = ''
-    if args.fetch:
-        source = args.fetch
-        extracmdopts = '-x %s' % srctree
+    if args.fetchuri:
+        source = args.fetchuri
+        if srctree:
+            extracmdopts += ' -x %s' % srctree
+        else:
+            extracmdopts += ' -x %s' % tmpsrcdir
     else:
         source = srctree
+    if args.recipename:
+        extracmdopts += ' -N %s' % args.recipename
     if args.version:
         extracmdopts += ' -V %s' % args.version
     if args.binary:
         extracmdopts += ' -b'
-    try:
-        stdout, _ = exec_build_env_command(config.init_path, basepath, 'recipetool --color=%s create -o %s "%s" %s' % (color, recipefile, source, extracmdopts))
-    except bb.process.ExecutionError as e:
-        raise DevtoolError('Command \'%s\' failed:\n%s' % (e.command, e.stdout))
 
-    _add_md5(config, args.recipename, recipefile)
+    tempdir = tempfile.mkdtemp(prefix='devtool')
+    try:
+        try:
+            stdout, _ = exec_build_env_command(config.init_path, basepath, 'recipetool --color=%s create -o %s "%s" %s' % (color, tempdir, source, extracmdopts))
+        except bb.process.ExecutionError as e:
+            if e.exitcode == 15:
+                raise DevtoolError('Unable to auto-determine name from source tree, please specify it with -N/--name')
+            else:
+                raise DevtoolError('Command \'%s\' failed:\n%s' % (e.command, e.stdout))
+
+        recipes = glob.glob(os.path.join(tempdir, '*.bb'))
+        if recipes:
+            recipename = os.path.splitext(os.path.basename(recipes[0]))[0].split('_')[0]
+            if recipename in workspace:
+                raise DevtoolError('A recipe with the same name as the one being created (%s) already exists in your workspace' % recipename)
+            recipedir = os.path.join(config.workspace_path, 'recipes', recipename)
+            bb.utils.mkdirhier(recipedir)
+            recipefile = os.path.join(recipedir, os.path.basename(recipes[0]))
+            appendfile = recipe_to_append(recipefile, config)
+            if os.path.exists(appendfile):
+                # This shouldn't be possible, but just in case
+                raise DevtoolError('A recipe with the same name as the one being created already exists in your workspace')
+            if os.path.exists(recipefile):
+                raise DevtoolError('A recipe file %s already exists in your workspace; this shouldn\'t be there - please delete it before continuing' % recipefile)
+            if tmpsrcdir:
+                srctree = os.path.join(srctreeparent, recipename)
+                if os.path.exists(tmpsrcdir):
+                    if os.path.exists(srctree):
+                        if os.path.isdir(srctree):
+                            try:
+                                os.rmdir(srctree)
+                            except OSError as e:
+                                if e.errno == errno.ENOTEMPTY:
+                                    raise DevtoolError('Source tree path %s already exists and is not empty' % srctree)
+                                else:
+                                    raise
+                        else:
+                            raise DevtoolError('Source tree path %s already exists and is not a directory' % srctree)
+                    logger.info('Using default source tree path %s' % srctree)
+                    shutil.move(tmpsrcdir, srctree)
+                else:
+                    raise DevtoolError('Couldn\'t find source tree created by recipetool')
+            bb.utils.mkdirhier(recipedir)
+            shutil.move(recipes[0], recipefile)
+        else:
+            raise DevtoolError('Command \'%s\' did not create any recipe file:\n%s' % (e.command, e.stdout))
+    finally:
+        if tmpsrcdir and os.path.exists(tmpsrcdir):
+            shutil.rmtree(tmpsrcdir)
+        shutil.rmtree(tempdir)
+
+    _add_md5(config, recipename, recipefile)
 
     if args.fetch and not args.no_git:
         setup_git_repo(srctree, args.version, 'devtool')
@@ -111,12 +201,12 @@ def add(args, config, basepath, workspace):
         (stdout, _) = bb.process.run('git rev-parse HEAD', cwd=srctree)
         initial_rev = stdout.rstrip()
 
-    tinfoil = setup_tinfoil(config_only=True)
+    tinfoil = setup_tinfoil(config_only=True, basepath=basepath)
     rd = oe.recipeutils.parse_recipe(recipefile, None, tinfoil.config_data)
     if not rd:
         return 1
 
-    appendfile = os.path.join(appendpath, '%s.bbappend' % bp)
+    bb.utils.mkdirhier(os.path.dirname(appendfile))
     with open(appendfile, 'w') as f:
         f.write('inherit externalsrc\n')
         f.write('EXTERNALSRC = "%s"\n' % srctree)
@@ -133,7 +223,7 @@ def add(args, config, basepath, workspace):
             f.write('    rm -f ${D}/singletask.lock\n')
             f.write('}\n')
 
-    _add_md5(config, args.recipename, appendfile)
+    _add_md5(config, recipename, appendfile)
 
     logger.info('Recipe %s has been automatically created; further editing may be required to make it fully functional' % recipefile)
 
@@ -173,6 +263,43 @@ def _check_compatible_recipe(pn, d):
                            "from working. You will need to disable this "
                            "first." % pn)
 
+def _move_file(src, dst):
+    """Move a file. Creates all the directory components of destination path."""
+    dst_d = os.path.dirname(dst)
+    if dst_d:
+        bb.utils.mkdirhier(dst_d)
+    shutil.move(src, dst)
+
+def _git_ls_tree(repodir, treeish='HEAD', recursive=False):
+    """List contents of a git treeish"""
+    import bb
+    cmd = ['git', 'ls-tree', '-z', treeish]
+    if recursive:
+        cmd.append('-r')
+    out, _ = bb.process.run(cmd, cwd=repodir)
+    ret = {}
+    for line in out.split('\0'):
+        if line:
+            split = line.split(None, 4)
+            ret[split[3]] = split[0:3]
+    return ret
+
+def _git_exclude_path(srctree, path):
+    """Return pathspec (list of paths) that excludes certain path"""
+    # NOTE: "Filtering out" files/paths in this way is not entirely reliable -
+    # we don't catch files that are deleted, for example. A more reliable way
+    # to implement this would be to use "negative pathspecs" which were
+    # introduced in Git v1.9.0. Revisit this when/if the required Git version
+    # becomes greater than that.
+    path = os.path.normpath(path)
+    recurse = True if len(path.split(os.path.sep)) > 1 else False
+    git_files = _git_ls_tree(srctree, 'HEAD', recurse).keys()
+    if path in git_files:
+        git_files.remove(path)
+        return git_files
+    else:
+        return ['.']
+
 def _ls_tree(directory):
     """Recursive listing of files in a directory"""
     ret = []
@@ -187,14 +314,39 @@ def extract(args, config, basepath, workspace):
     import bb
 
     tinfoil = _prep_extract_operation(config, basepath, args.recipename)
+    if not tinfoil:
+        # Error already shown
+        return 1
 
     rd = parse_recipe(config, tinfoil, args.recipename, True)
     if not rd:
         return 1
 
     srctree = os.path.abspath(args.srctree)
-    initial_rev = _extract_source(srctree, args.keep_temp, args.branch, rd)
+    initial_rev = _extract_source(srctree, args.keep_temp, args.branch, False, rd)
     logger.info('Source tree extracted to %s' % srctree)
+
+    if initial_rev:
+        return 0
+    else:
+        return 1
+
+def sync(args, config, basepath, workspace):
+    """Entry point for the devtool 'sync' subcommand"""
+    import bb
+
+    tinfoil = _prep_extract_operation(config, basepath, args.recipename)
+    if not tinfoil:
+        # Error already shown
+        return 1
+
+    rd = parse_recipe(config, tinfoil, args.recipename, True)
+    if not rd:
+        return 1
+
+    srctree = os.path.abspath(args.srctree)
+    initial_rev = _extract_source(srctree, args.keep_temp, args.branch, True, rd)
+    logger.info('Source tree %s synchronized' % srctree)
 
     if initial_rev:
         return 0
@@ -231,22 +383,24 @@ class BbTaskExecutor(object):
 def _prep_extract_operation(config, basepath, recipename):
     """HACK: Ugly workaround for making sure that requirements are met when
        trying to extract a package. Returns the tinfoil instance to be used."""
-    tinfoil = setup_tinfoil()
+    tinfoil = setup_tinfoil(basepath=basepath)
     rd = parse_recipe(config, tinfoil, recipename, True)
+    if not rd:
+        return None
 
     if bb.data.inherits_class('kernel-yocto', rd):
         tinfoil.shutdown()
         try:
             stdout, _ = exec_build_env_command(config.init_path, basepath,
                                                'bitbake kern-tools-native')
-            tinfoil = setup_tinfoil()
+            tinfoil = setup_tinfoil(basepath=basepath)
         except bb.process.ExecutionError as err:
             raise DevtoolError("Failed to build kern-tools-native:\n%s" %
                                err.stdout)
     return tinfoil
 
 
-def _extract_source(srctree, keep_temp, devbranch, d):
+def _extract_source(srctree, keep_temp, devbranch, sync, d):
     """Extract sources of a recipe"""
     import bb.event
     import oe.recipeutils
@@ -265,21 +419,26 @@ def _extract_source(srctree, keep_temp, devbranch, d):
 
     _check_compatible_recipe(pn, d)
 
-    if os.path.exists(srctree):
-        if not os.path.isdir(srctree):
-            raise DevtoolError("output path %s exists and is not a directory" %
-                               srctree)
-        elif os.listdir(srctree):
-            raise DevtoolError("output path %s already exists and is "
-                               "non-empty" % srctree)
+    if sync:
+        if not os.path.exists(srctree):
+                raise DevtoolError("output path %s does not exist" % srctree)
+    else:
+        if os.path.exists(srctree):
+            if not os.path.isdir(srctree):
+                raise DevtoolError("output path %s exists and is not a directory" %
+                                   srctree)
+            elif os.listdir(srctree):
+                raise DevtoolError("output path %s already exists and is "
+                                   "non-empty" % srctree)
 
-    if 'noexec' in (d.getVarFlags('do_unpack', False) or []):
-        raise DevtoolError("The %s recipe has do_unpack disabled, unable to "
-                           "extract source" % pn)
+        if 'noexec' in (d.getVarFlags('do_unpack', False) or []):
+            raise DevtoolError("The %s recipe has do_unpack disabled, unable to "
+                               "extract source" % pn)
 
-    # Prepare for shutil.move later on
-    bb.utils.mkdirhier(srctree)
-    os.rmdir(srctree)
+    if not sync:
+        # Prepare for shutil.move later on
+        bb.utils.mkdirhier(srctree)
+        os.rmdir(srctree)
 
     # We don't want notes to be printed, they are too verbose
     origlevel = bb.logger.getEffectiveLevel()
@@ -318,10 +477,25 @@ def _extract_source(srctree, keep_temp, devbranch, d):
             logger.info('Doing kernel checkout...')
             task_executor.exec_func('do_kernel_checkout', False)
         srcsubdir = crd.getVar('S', True)
+
+        # Move local source files into separate subdir
+        recipe_patches = [os.path.basename(patch) for patch in
+                          oe.recipeutils.get_recipe_patches(crd)]
+        local_files = oe.recipeutils.get_recipe_local_files(crd)
+        local_files = [fname for fname in local_files if
+                       os.path.exists(os.path.join(workdir, fname))]
+        if local_files:
+            for fname in local_files:
+                _move_file(os.path.join(workdir, fname),
+                           os.path.join(tempdir, 'oe-local-files', fname))
+            with open(os.path.join(tempdir, 'oe-local-files', '.gitignore'),
+                      'w') as f:
+                f.write('# Ignore local files, by default. Remove this file '
+                        'if you want to commit the directory to Git\n*\n')
+
         if srcsubdir == workdir:
-            # Find non-patch sources that were "unpacked" to srctree directory
-            recipe_patches = [os.path.basename(patch) for patch in
-                              oe.recipeutils.get_recipe_patches(crd)]
+            # Find non-patch non-local sources that were "unpacked" to srctree
+            # directory
             src_files = [fname for fname in _ls_tree(workdir) if
                          os.path.basename(fname) not in recipe_patches]
             # Force separate S so that patch files can be left out from srctree
@@ -329,9 +503,8 @@ def _extract_source(srctree, keep_temp, devbranch, d):
             crd.setVar('S', srcsubdir)
             # Move source files to S
             for path in src_files:
-                tgt_dir = os.path.join(srcsubdir, os.path.dirname(path))
-                bb.utils.mkdirhier(tgt_dir)
-                shutil.move(os.path.join(workdir, path), tgt_dir)
+                _move_file(os.path.join(workdir, path),
+                           os.path.join(srcsubdir, path))
         elif os.path.dirname(srcsubdir) != workdir:
             # Handle if S is set to a subdirectory of the source
             srcsubdir = os.path.join(workdir, os.path.relpath(srcsubdir, workdir).split(os.sep)[0])
@@ -345,12 +518,12 @@ def _extract_source(srctree, keep_temp, devbranch, d):
                 haspatches = True
             else:
                 os.rmdir(patchdir)
-
+        # Make sure that srcsubdir exists
+        bb.utils.mkdirhier(srcsubdir)
         if not os.path.exists(srcsubdir) or not os.listdir(srcsubdir):
-            raise DevtoolError("no source unpacked to S, either the %s "
-                               "recipe doesn't use any source or the "
-                               "correct source directory could not be "
-                               "determined" % pn)
+            logger.warning("no source unpacked to S, either the %s recipe "
+                           "doesn't use any source or the correct source "
+                           "directory could not be determined" % pn)
 
         setup_git_repo(srcsubdir, crd.getVar('PV', True), devbranch)
 
@@ -369,7 +542,43 @@ def _extract_source(srctree, keep_temp, devbranch, d):
             if haspatches:
                 bb.process.run('git checkout patches', cwd=srcsubdir)
 
-        shutil.move(srcsubdir, srctree)
+        if bb.data.inherits_class('kernel-yocto', d):
+            # Store generate and store kernel config
+            logger.info('Generating kernel config')
+            task_executor.exec_func('do_configure', False)
+            kconfig = os.path.join(d.getVar('B', True), '.config')
+            shutil.copy2(kconfig, srcsubdir)
+
+
+        tempdir_localdir = os.path.join(tempdir, 'oe-local-files')
+        srctree_localdir = os.path.join(srctree, 'oe-local-files')
+
+        if sync:
+            bb.process.run('git fetch file://' + srcsubdir + ' ' + devbranch + ':' + devbranch, cwd=srctree)
+
+            # Move oe-local-files directory to srctree
+            # As the oe-local-files is not part of the constructed git tree,
+            # remove them directly during the synchrounizating might surprise
+            # the users.  Instead, we move it to oe-local-files.bak and remind
+            # user in the log message.
+            if os.path.exists(srctree_localdir + '.bak'):
+                shutil.rmtree(srctree_localdir, srctree_localdir + '.bak')
+
+            if os.path.exists(srctree_localdir):
+                logger.info('Backing up current local file directory %s' % srctree_localdir)
+                shutil.move(srctree_localdir, srctree_localdir + '.bak')
+
+            if os.path.exists(tempdir_localdir):
+                logger.info('Syncing local source files to srctree...')
+                shutil.copytree(tempdir_localdir, srctree_localdir)
+        else:
+            # Move oe-local-files directory to srctree
+            if os.path.exists(tempdir_localdir):
+                logger.info('Adding local source files to srctree...')
+                shutil.move(tempdir_localdir, srcsubdir)
+
+            shutil.move(srcsubdir, srctree)
+
     finally:
         bb.logger.setLevel(origlevel)
 
@@ -389,7 +598,7 @@ def _add_md5(config, recipename, filename):
             f.write('%s|%s|%s\n' % (recipename, os.path.relpath(fn, config.workspace_path), md5))
 
     if os.path.isdir(filename):
-        for root, _, files in os.walk(os.path.dirname(filename)):
+        for root, _, files in os.walk(filename):
             for f in files:
                 addfile(os.path.join(root, f))
     else:
@@ -436,57 +645,68 @@ def modify(args, config, basepath, workspace):
         raise DevtoolError("recipe %s is already in your workspace" %
                            args.recipename)
 
-    if not args.extract and not os.path.isdir(args.srctree):
+    if args.srctree:
+        srctree = os.path.abspath(args.srctree)
+    else:
+        srctree = get_default_srctree(config, args.recipename)
+
+    if not args.extract and not os.path.isdir(srctree):
         raise DevtoolError("directory %s does not exist or not a directory "
                            "(specify -x to extract source from recipe)" %
-                           args.srctree)
+                           srctree)
     if args.extract:
         tinfoil = _prep_extract_operation(config, basepath, args.recipename)
+        if not tinfoil:
+            # Error already shown
+            return 1
     else:
-        tinfoil = setup_tinfoil()
+        tinfoil = setup_tinfoil(basepath=basepath)
 
     rd = parse_recipe(config, tinfoil, args.recipename, True)
     if not rd:
         return 1
+
+    pn = rd.getVar('PN', True)
+    if pn != args.recipename:
+        logger.info('Mapping %s to %s' % (args.recipename, pn))
+    if pn in workspace:
+        raise DevtoolError("recipe %s is already in your workspace" %
+                           pn)
+
     recipefile = rd.getVar('FILE', True)
-    appendname = os.path.splitext(os.path.basename(recipefile))[0]
-    if args.wildcard:
-        appendname = re.sub(r'_.*', '_%', appendname)
-    appendpath = os.path.join(config.workspace_path, 'appends')
-    appendfile = os.path.join(appendpath, appendname + '.bbappend')
+    appendfile = recipe_to_append(recipefile, config, args.wildcard)
     if os.path.exists(appendfile):
         raise DevtoolError("Another variant of recipe %s is already in your "
                            "workspace (only one variant of a recipe can "
                            "currently be worked on at once)"
-                           % args.recipename)
+                           % pn)
 
-    _check_compatible_recipe(args.recipename, rd)
+    _check_compatible_recipe(pn, rd)
 
     initial_rev = None
     commits = []
-    srctree = os.path.abspath(args.srctree)
     if args.extract:
-        initial_rev = _extract_source(args.srctree, False, args.branch, rd)
+        initial_rev = _extract_source(srctree, False, args.branch, False, rd)
         if not initial_rev:
             return 1
         logger.info('Source tree extracted to %s' % srctree)
         # Get list of commits since this revision
-        (stdout, _) = bb.process.run('git rev-list --reverse %s..HEAD' % initial_rev, cwd=args.srctree)
+        (stdout, _) = bb.process.run('git rev-list --reverse %s..HEAD' % initial_rev, cwd=srctree)
         commits = stdout.split()
     else:
-        if os.path.exists(os.path.join(args.srctree, '.git')):
+        if os.path.exists(os.path.join(srctree, '.git')):
             # Check if it's a tree previously extracted by us
             try:
-                (stdout, _) = bb.process.run('git branch --contains devtool-base', cwd=args.srctree)
+                (stdout, _) = bb.process.run('git branch --contains devtool-base', cwd=srctree)
             except bb.process.ExecutionError:
                 stdout = ''
             for line in stdout.splitlines():
                 if line.startswith('*'):
-                    (stdout, _) = bb.process.run('git rev-parse devtool-base', cwd=args.srctree)
+                    (stdout, _) = bb.process.run('git rev-parse devtool-base', cwd=srctree)
                     initial_rev = stdout.rstrip()
             if not initial_rev:
                 # Otherwise, just grab the head revision
-                (stdout, _) = bb.process.run('git rev-parse HEAD', cwd=args.srctree)
+                (stdout, _) = bb.process.run('git rev-parse HEAD', cwd=srctree)
                 initial_rev = stdout.rstrip()
 
     # Check that recipe isn't using a shared workdir
@@ -497,28 +717,33 @@ def modify(args, config, basepath, workspace):
         srcsubdir = os.path.relpath(s, workdir).split(os.sep, 1)[1]
         srctree = os.path.join(srctree, srcsubdir)
 
-    if not os.path.exists(appendpath):
-        os.makedirs(appendpath)
+    bb.utils.mkdirhier(os.path.dirname(appendfile))
     with open(appendfile, 'w') as f:
-        f.write('FILESEXTRAPATHS_prepend := "${THISDIR}/${PN}:"\n\n')
-        f.write('inherit externalsrc\n')
+        f.write('FILESEXTRAPATHS_prepend := "${THISDIR}/${PN}:"\n')
+        # Local files can be modified/tracked in separate subdir under srctree
+        # Mostly useful for packages with S != WORKDIR
+        f.write('FILESPATH_prepend := "%s:"\n' %
+                os.path.join(srctree, 'oe-local-files'))
+
+        f.write('\ninherit externalsrc\n')
         f.write('# NOTE: We use pn- overrides here to avoid affecting multiple variants in the case where the recipe uses BBCLASSEXTEND\n')
-        f.write('EXTERNALSRC_pn-%s = "%s"\n' % (args.recipename, srctree))
+        f.write('EXTERNALSRC_pn-%s = "%s"\n' % (pn, srctree))
 
         b_is_s = use_external_build(args.same_dir, args.no_same_dir, rd)
         if b_is_s:
-            f.write('EXTERNALSRC_BUILD_pn-%s = "%s"\n' % (args.recipename, srctree))
+            f.write('EXTERNALSRC_BUILD_pn-%s = "%s"\n' % (pn, srctree))
 
         if bb.data.inherits_class('kernel', rd):
-            f.write('SRCTREECOVEREDTASKS = "do_validate_branches do_kernel_checkout do_fetch do_unpack"\n')
+            f.write('SRCTREECOVEREDTASKS = "do_validate_branches do_kernel_checkout '
+                    'do_fetch do_unpack do_patch do_kernel_configme do_kernel_configcheck"\n')
         if initial_rev:
             f.write('\n# initial_rev: %s\n' % initial_rev)
             for commit in commits:
                 f.write('# commit: %s\n' % commit)
 
-    _add_md5(config, args.recipename, appendfile)
+    _add_md5(config, pn, appendfile)
 
-    logger.info('Recipe %s now set up to build from %s' % (args.recipename, srctree))
+    logger.info('Recipe %s now set up to build from %s' % (pn, srctree))
 
     return 0
 
@@ -542,6 +767,7 @@ def _get_patchset_revs(args, srctree, recipe_path):
                 commits.append(line.split(':')[-1].strip())
 
     update_rev = initial_rev
+    changed_revs = None
     if initial_rev:
         # Find first actually changed revision
         stdout, _ = bb.process.run('git rev-list --reverse %s..HEAD' %
@@ -551,50 +777,156 @@ def _get_patchset_revs(args, srctree, recipe_path):
             if newcommits[i] == commits[i]:
                 update_rev = commits[i]
 
-    return initial_rev, update_rev
+        try:
+            stdout, _ = bb.process.run('git cherry devtool-patched',
+                                        cwd=srctree)
+        except bb.process.ExecutionError as err:
+            stdout = None
 
-def _remove_patch_entries(srcuri, patchlist):
-    """Remove patch entries from SRC_URI"""
-    remaining = patchlist[:]
+        if stdout is not None:
+            changed_revs = []
+            for line in stdout.splitlines():
+                if line.startswith('+ '):
+                    rev = line.split()[1]
+                    if rev in newcommits:
+                        changed_revs.append(rev)
+
+    return initial_rev, update_rev, changed_revs
+
+def _remove_file_entries(srcuri, filelist):
+    """Remove file:// entries from SRC_URI"""
+    remaining = filelist[:]
     entries = []
-    for patch in patchlist:
-        patchfile = os.path.basename(patch)
+    for fname in filelist:
+        basename = os.path.basename(fname)
         for i in xrange(len(srcuri)):
-            if srcuri[i].startswith('file://') and os.path.basename(srcuri[i].split(';')[0]) == patchfile:
+            if (srcuri[i].startswith('file://') and
+                    os.path.basename(srcuri[i].split(';')[0]) == basename):
                 entries.append(srcuri[i])
-                remaining.remove(patch)
+                remaining.remove(fname)
                 srcuri.pop(i)
                 break
     return entries, remaining
 
-def _remove_patch_files(args, patches, destpath):
+def _remove_source_files(args, files, destpath):
     """Unlink existing patch files"""
-    for patchfile in patches:
+    for path in files:
         if args.append:
             if not destpath:
                 raise Exception('destpath should be set here')
-            patchfile = os.path.join(destpath, os.path.basename(patchfile))
+            path = os.path.join(destpath, os.path.basename(path))
 
-        if os.path.exists(patchfile):
-            logger.info('Removing patch %s' % patchfile)
+        if os.path.exists(path):
+            logger.info('Removing file %s' % path)
             # FIXME "git rm" here would be nice if the file in question is
             #       tracked
             # FIXME there's a chance that this file is referred to by
             #       another recipe, in which case deleting wouldn't be the
             #       right thing to do
-            os.remove(patchfile)
+            os.remove(path)
             # Remove directory if empty
             try:
-                os.rmdir(os.path.dirname(patchfile))
+                os.rmdir(os.path.dirname(path))
             except OSError as ose:
                 if ose.errno != errno.ENOTEMPTY:
                     raise
+
+
+def _export_patches(srctree, rd, start_rev, destdir):
+    """Export patches from srctree to given location.
+       Returns three-tuple of dicts:
+         1. updated - patches that already exist in SRCURI
+         2. added - new patches that don't exist in SRCURI
+         3  removed - patches that exist in SRCURI but not in exported patches
+      In each dict the key is the 'basepath' of the URI and value is the
+      absolute path to the existing file in recipe space (if any).
+    """
+    import oe.recipeutils
+    from oe.patch import GitApplyTree
+    updated = OrderedDict()
+    added = OrderedDict()
+    seqpatch_re = re.compile('^([0-9]{4}-)?(.+)')
+
+    existing_patches = dict((os.path.basename(path), path) for path in
+                            oe.recipeutils.get_recipe_patches(rd))
+
+    # Generate patches from Git, exclude local files directory
+    patch_pathspec = _git_exclude_path(srctree, 'oe-local-files')
+    GitApplyTree.extractPatches(srctree, start_rev, destdir, patch_pathspec)
+
+    new_patches = sorted(os.listdir(destdir))
+    for new_patch in new_patches:
+        # Strip numbering from patch names. If it's a git sequence named patch,
+        # the numbers might not match up since we are starting from a different
+        # revision This does assume that people are using unique shortlog
+        # values, but they ought to be anyway...
+        new_basename = seqpatch_re.match(new_patch).group(2)
+        found = False
+        for old_patch in existing_patches:
+            old_basename = seqpatch_re.match(old_patch).group(2)
+            if new_basename == old_basename:
+                updated[new_patch] = existing_patches.pop(old_patch)
+                found = True
+                # Rename patch files
+                if new_patch != old_patch:
+                    os.rename(os.path.join(destdir, new_patch),
+                              os.path.join(destdir, old_patch))
+                break
+        if not found:
+            added[new_patch] = None
+    return (updated, added, existing_patches)
+
+
+def _export_local_files(srctree, rd, destdir):
+    """Copy local files from srctree to given location.
+       Returns three-tuple of dicts:
+         1. updated - files that already exist in SRCURI
+         2. added - new files files that don't exist in SRCURI
+         3  removed - files that exist in SRCURI but not in exported files
+      In each dict the key is the 'basepath' of the URI and value is the
+      absolute path to the existing file in recipe space (if any).
+    """
+    import oe.recipeutils
+
+    # Find out local files (SRC_URI files that exist in the "recipe space").
+    # Local files that reside in srctree are not included in patch generation.
+    # Instead they are directly copied over the original source files (in
+    # recipe space).
+    existing_files = oe.recipeutils.get_recipe_local_files(rd)
+    new_set = None
+    updated = OrderedDict()
+    added = OrderedDict()
+    removed = OrderedDict()
+    git_files = _git_ls_tree(srctree)
+    if 'oe-local-files' in git_files:
+        # If tracked by Git, take the files from srctree HEAD. First get
+        # the tree object of the directory
+        tmp_index = os.path.join(srctree, '.git', 'index.tmp.devtool')
+        tree = git_files['oe-local-files'][2]
+        bb.process.run(['git', 'checkout', tree, '--', '.'], cwd=srctree,
+                        env=dict(os.environ, GIT_WORK_TREE=destdir,
+                                 GIT_INDEX_FILE=tmp_index))
+        new_set = _git_ls_tree(srctree, tree, True).keys()
+    elif os.path.isdir(os.path.join(srctree, 'oe-local-files')):
+        # If not tracked by Git, just copy from working copy
+        new_set = _ls_tree(os.path.join(srctree, 'oe-local-files'))
+        bb.process.run(['cp', '-ax',
+                        os.path.join(srctree, 'oe-local-files', '.'), destdir])
+    if new_set is not None:
+        for fname in new_set:
+            if fname in existing_files:
+                updated[fname] = existing_files.pop(fname)
+            elif fname != '.gitignore':
+                added[fname] = None
+
+        removed = existing_files
+    return (updated, added, removed)
+
 
 def _update_recipe_srcrev(args, srctree, rd, config_data):
     """Implement the 'srcrev' mode of update-recipe"""
     import bb
     import oe.recipeutils
-    from oe.patch import GitApplyTree
 
     recipefile = rd.getVar('FILE', True)
     logger.info('Updating SRCREV in recipe %s' % os.path.basename(recipefile))
@@ -610,158 +942,168 @@ def _update_recipe_srcrev(args, srctree, rd, config_data):
         raise DevtoolError('Invalid hash returned by git: %s' % stdout)
 
     destpath = None
-    removepatches = []
+    remove_files = []
     patchfields = {}
     patchfields['SRCREV'] = srcrev
     orig_src_uri = rd.getVar('SRC_URI', False) or ''
-    if not args.no_remove:
-        # Find list of existing patches in recipe file
-        existing_patches = oe.recipeutils.get_recipe_patches(rd)
+    srcuri = orig_src_uri.split()
+    tempdir = tempfile.mkdtemp(prefix='devtool')
+    update_srcuri = False
+    try:
+        local_files_dir = tempfile.mkdtemp(dir=tempdir)
+        upd_f, new_f, del_f = _export_local_files(srctree, rd, local_files_dir)
+        if not args.no_remove:
+            # Find list of existing patches in recipe file
+            patches_dir = tempfile.mkdtemp(dir=tempdir)
+            old_srcrev = (rd.getVar('SRCREV', False) or '')
+            upd_p, new_p, del_p = _export_patches(srctree, rd, old_srcrev,
+                                                  patches_dir)
 
-        old_srcrev = (rd.getVar('SRCREV', False) or '')
-        tempdir = tempfile.mkdtemp(prefix='devtool')
-        try:
-            GitApplyTree.extractPatches(srctree, old_srcrev, tempdir)
-            newpatches = os.listdir(tempdir)
-            for patch in existing_patches:
-                patchfile = os.path.basename(patch)
-                if patchfile in newpatches:
-                    removepatches.append(patch)
-        finally:
-            shutil.rmtree(tempdir)
+            # Remove deleted local files and "overlapping" patches
+            remove_files = del_f.values() + upd_p.values()
+            if remove_files:
+                removedentries = _remove_file_entries(srcuri, remove_files)[0]
+                update_srcuri = True
 
-        if removepatches:
-            srcuri = orig_src_uri.split()
-            removedentries, _ = _remove_patch_entries(srcuri, removepatches)
-            if removedentries:
+        if args.append:
+            files = dict((os.path.join(local_files_dir, key), val) for
+                          key, val in upd_f.items() + new_f.items())
+            removevalues = {}
+            if update_srcuri:
+                removevalues  = {'SRC_URI': removedentries}
+                patchfields['SRC_URI'] = '\\\n    '.join(srcuri)
+            _, destpath = oe.recipeutils.bbappend_recipe(
+                    rd, args.append, files, wildcardver=args.wildcard_version,
+                    extralines=patchfields, removevalues=removevalues)
+        else:
+            files_dir = os.path.join(os.path.dirname(recipefile),
+                                     rd.getVar('BPN', True))
+            for basepath, path in upd_f.iteritems():
+                logger.info('Updating file %s' % basepath)
+                _move_file(os.path.join(local_files_dir, basepath), path)
+                update_srcuri= True
+            for basepath, path in new_f.iteritems():
+                logger.info('Adding new file %s' % basepath)
+                _move_file(os.path.join(local_files_dir, basepath),
+                           os.path.join(files_dir, basepath))
+                srcuri.append('file://%s' % basepath)
+                update_srcuri = True
+            if update_srcuri:
                 patchfields['SRC_URI'] = ' '.join(srcuri)
-
-    if args.append:
-        _, destpath = oe.recipeutils.bbappend_recipe(
-                rd, args.append, None, wildcardver=args.wildcard_version,
-                extralines=patchfields)
-    else:
-        oe.recipeutils.patch_recipe(rd, recipefile, patchfields)
-
+            oe.recipeutils.patch_recipe(rd, recipefile, patchfields)
+    finally:
+        shutil.rmtree(tempdir)
     if not 'git://' in orig_src_uri:
         logger.info('You will need to update SRC_URI within the recipe to '
                     'point to a git repository where you have pushed your '
                     'changes')
 
-    _remove_patch_files(args, removepatches, destpath)
+    _remove_source_files(args, remove_files, destpath)
 
-def _update_recipe_patch(args, config, srctree, rd, config_data):
+def _update_recipe_patch(args, config, workspace, srctree, rd, config_data):
     """Implement the 'patch' mode of update-recipe"""
     import bb
     import oe.recipeutils
-    from oe.patch import GitApplyTree
 
     recipefile = rd.getVar('FILE', True)
-    append = os.path.join(config.workspace_path, 'appends', '%s.bbappend' %
-                          os.path.splitext(os.path.basename(recipefile))[0])
+    append = workspace[args.recipename]['bbappend']
     if not os.path.exists(append):
         raise DevtoolError('unable to find workspace bbappend for recipe %s' %
                            args.recipename)
 
-    initial_rev, update_rev = _get_patchset_revs(args, srctree, append)
+    initial_rev, update_rev, changed_revs = _get_patchset_revs(args, srctree, append)
     if not initial_rev:
         raise DevtoolError('Unable to find initial revision - please specify '
                            'it with --initial-rev')
 
-    # Find list of existing patches in recipe file
-    existing_patches = oe.recipeutils.get_recipe_patches(rd)
-
-    removepatches = []
-    seqpatch_re = re.compile('^([0-9]{4}-)?(.+)')
-    if not args.no_remove:
-        # Get all patches from source tree and check if any should be removed
-        tempdir = tempfile.mkdtemp(prefix='devtool')
-        try:
-            GitApplyTree.extractPatches(srctree, initial_rev, tempdir)
-            # Strip numbering from patch names. If it's a git sequence named
-            # patch, the numbers might not match up since we are starting from
-            # a different revision This does assume that people are using
-            # unique shortlog values, but they ought to be anyway...
-            newpatches = [seqpatch_re.match(fname).group(2) for fname in
-                          os.listdir(tempdir)]
-            for patch in existing_patches:
-                basename = seqpatch_re.match(
-                                os.path.basename(patch)).group(2)
-                if basename not in newpatches:
-                    removepatches.append(patch)
-        finally:
-            shutil.rmtree(tempdir)
-
-    # Get updated patches from source tree
     tempdir = tempfile.mkdtemp(prefix='devtool')
     try:
-        GitApplyTree.extractPatches(srctree, update_rev, tempdir)
+        local_files_dir = tempfile.mkdtemp(dir=tempdir)
+        upd_f, new_f, del_f = _export_local_files(srctree, rd, local_files_dir)
 
-        # Match up and replace existing patches with corresponding new patches
-        updatepatches = False
+        remove_files = []
+        if not args.no_remove:
+            # Get all patches from source tree and check if any should be removed
+            all_patches_dir = tempfile.mkdtemp(dir=tempdir)
+            upd_p, new_p, del_p = _export_patches(srctree, rd, initial_rev,
+                                                  all_patches_dir)
+            # Remove deleted local files and  patches
+            remove_files = del_f.values() + del_p.values()
+
+        # Get updated patches from source tree
+        patches_dir = tempfile.mkdtemp(dir=tempdir)
+        upd_p, new_p, del_p = _export_patches(srctree, rd, update_rev,
+                                              patches_dir)
+        updatefiles = False
         updaterecipe = False
         destpath = None
-        newpatches = os.listdir(tempdir)
+        srcuri = (rd.getVar('SRC_URI', False) or '').split()
         if args.append:
-            patchfiles = {}
-            for patch in existing_patches:
-                patchfile = os.path.basename(patch)
-                if patchfile in newpatches:
-                    patchfiles[os.path.join(tempdir, patchfile)] = patchfile
-                    newpatches.remove(patchfile)
-            for patchfile in newpatches:
-                patchfiles[os.path.join(tempdir, patchfile)] = None
-
-            if patchfiles or removepatches:
+            files = dict((os.path.join(local_files_dir, key), val) for
+                         key, val in upd_f.items() + new_f.items())
+            files.update(dict((os.path.join(patches_dir, key), val) for
+                              key, val in upd_p.items() + new_p.items()))
+            if files or remove_files:
                 removevalues = None
-                if removepatches:
-                    srcuri = (rd.getVar('SRC_URI', False) or '').split()
-                    removedentries, remaining = _remove_patch_entries(
-                                                    srcuri, removepatches)
+                if remove_files:
+                    removedentries, remaining = _remove_file_entries(
+                                                    srcuri, remove_files)
                     if removedentries or remaining:
                         remaining = ['file://' + os.path.basename(item) for
                                      item in remaining]
                         removevalues = {'SRC_URI': removedentries + remaining}
                 _, destpath = oe.recipeutils.bbappend_recipe(
-                                rd, args.append, patchfiles,
+                                rd, args.append, files,
                                 removevalues=removevalues)
             else:
-                logger.info('No patches needed updating')
+                logger.info('No patches or local source files needed updating')
         else:
-            for patch in existing_patches:
-                patchfile = os.path.basename(patch)
-                if patchfile in newpatches:
-                    logger.info('Updating patch %s' % patchfile)
-                    shutil.move(os.path.join(tempdir, patchfile), patch)
-                    newpatches.remove(patchfile)
-                    updatepatches = True
-            srcuri = (rd.getVar('SRC_URI', False) or '').split()
-            if newpatches:
-                # Add any patches left over
-                patchdir = os.path.join(os.path.dirname(recipefile),
-                                        rd.getVar('BPN', True))
-                bb.utils.mkdirhier(patchdir)
-                for patchfile in newpatches:
-                    logger.info('Adding new patch %s' % patchfile)
-                    shutil.move(os.path.join(tempdir, patchfile),
-                                os.path.join(patchdir, patchfile))
-                    srcuri.append('file://%s' % patchfile)
-                    updaterecipe = True
-            if removepatches:
-                removedentries, _ = _remove_patch_entries(srcuri, removepatches)
-                if removedentries:
-                    updaterecipe = True
+            # Update existing files
+            for basepath, path in upd_f.iteritems():
+                logger.info('Updating file %s' % basepath)
+                _move_file(os.path.join(local_files_dir, basepath), path)
+                updatefiles = True
+            for basepath, path in upd_p.iteritems():
+                patchfn = os.path.join(patches_dir, basepath)
+                if changed_revs is not None:
+                    # Avoid updating patches that have not actually changed
+                    with open(patchfn, 'r') as f:
+                        firstlineitems = f.readline().split()
+                        if len(firstlineitems) > 1 and len(firstlineitems[1]) == 40:
+                            if not firstlineitems[1] in changed_revs:
+                                continue
+                logger.info('Updating patch %s' % basepath)
+                _move_file(patchfn, path)
+                updatefiles = True
+            # Add any new files
+            files_dir = os.path.join(os.path.dirname(recipefile),
+                                     rd.getVar('BPN', True))
+            for basepath, path in new_f.iteritems():
+                logger.info('Adding new file %s' % basepath)
+                _move_file(os.path.join(local_files_dir, basepath),
+                           os.path.join(files_dir, basepath))
+                srcuri.append('file://%s' % basepath)
+                updaterecipe = True
+            for basepath, path in new_p.iteritems():
+                logger.info('Adding new patch %s' % basepath)
+                _move_file(os.path.join(patches_dir, basepath),
+                           os.path.join(files_dir, basepath))
+                srcuri.append('file://%s' % basepath)
+                updaterecipe = True
+            # Update recipe, if needed
+            if _remove_file_entries(srcuri, remove_files)[0]:
+                updaterecipe = True
             if updaterecipe:
                 logger.info('Updating recipe %s' % os.path.basename(recipefile))
                 oe.recipeutils.patch_recipe(rd, recipefile,
                                             {'SRC_URI': ' '.join(srcuri)})
-            elif not updatepatches:
+            elif not updatefiles:
                 # Neither patches nor recipe were updated
-                logger.info('No patches need updating')
+                logger.info('No patches or files need updating')
     finally:
         shutil.rmtree(tempdir)
 
-    _remove_patch_files(args, removepatches, destpath)
+    _remove_source_files(args, remove_files, destpath)
 
 def _guess_recipe_update_mode(srctree, rdata):
     """Guess the recipe update mode to use"""
@@ -797,7 +1139,7 @@ def update_recipe(args, config, basepath, workspace):
             raise DevtoolError('conf/layer.conf not found in bbappend '
                                'destination layer "%s"' % args.append)
 
-    tinfoil = setup_tinfoil()
+    tinfoil = setup_tinfoil(basepath=basepath, tracking=True)
 
     rd = parse_recipe(config, tinfoil, args.recipename, True)
     if not rd:
@@ -812,7 +1154,7 @@ def update_recipe(args, config, basepath, workspace):
     if mode == 'srcrev':
         _update_recipe_srcrev(args, srctree, rd, tinfoil.config_data)
     elif mode == 'patch':
-        _update_recipe_patch(args, config, srctree, rd, tinfoil.config_data)
+        _update_recipe_patch(args, config, workspace, srctree, rd, tinfoil.config_data)
     else:
         raise DevtoolError('update_recipe: invalid mode %s' % mode)
 
@@ -827,7 +1169,16 @@ def status(args, config, basepath, workspace):
     """Entry point for the devtool 'status' subcommand"""
     if workspace:
         for recipe, value in workspace.iteritems():
-            print("%s: %s" % (recipe, value['srctree']))
+            bbfile = os.path.basename(value['bbappend']).replace('.bbappend', '.bb').replace('%', '*')
+            recipefile = glob.glob(os.path.join(config.workspace_path,
+                                                'recipes',
+                                                recipe,
+                                                bbfile))
+            if recipefile:
+                recipestr = ' (%s)' % recipefile[0]
+            else:
+                recipestr = ''
+            print("%s: %s%s" % (recipe, value['srctree'], recipestr))
     else:
         logger.info('No recipes currently in your workspace - you can use "devtool modify" to work on an existing recipe or "devtool add" to add a new one')
     return 0
@@ -868,8 +1219,8 @@ def reset(args, config, basepath, workspace):
                 for root, dirs, files in os.walk(origdir):
                     for fn in files:
                         logger.warn('Preserving %s in %s' % (fn, preservepath))
-                        bb.utils.mkdirhier(preservepath)
-                        shutil.move(os.path.join(origdir, fn), os.path.join(preservepath, fn))
+                        _move_file(os.path.join(origdir, fn),
+                                   os.path.join(preservepath, fn))
                     for dn in dirs:
                         os.rmdir(os.path.join(root, dn))
                 os.rmdir(origdir)
@@ -878,65 +1229,135 @@ def reset(args, config, basepath, workspace):
         # We don't automatically create this dir next to appends, but the user can
         preservedir(os.path.join(config.workspace_path, 'appends', pn))
 
+        srctree = workspace[pn]['srctree']
+        if os.path.isdir(srctree):
+            if os.listdir(srctree):
+                # We don't want to risk wiping out any work in progress
+                logger.info('Leaving source tree %s as-is; if you no '
+                            'longer need it then please delete it manually'
+                            % srctree)
+            else:
+                # This is unlikely, but if it's empty we can just remove it
+                os.rmdir(srctree)
+
     return 0
 
 
+def edit_recipe(args, config, basepath, workspace):
+    """Entry point for the devtool 'edit-recipe' subcommand"""
+    if args.any_recipe:
+        tinfoil = setup_tinfoil(config_only=False, basepath=basepath)
+        try:
+            rd = parse_recipe(config, tinfoil, args.recipename, True)
+            if not rd:
+                return 1
+            recipefile = rd.getVar('FILE', True)
+        finally:
+            tinfoil.shutdown()
+    else:
+        check_workspace_recipe(workspace, args.recipename)
+        bbappend = workspace[args.recipename]['bbappend']
+        bbfile = os.path.basename(bbappend).replace('.bbappend', '.bb').replace('%', '*')
+        recipefile = glob.glob(os.path.join(config.workspace_path,
+                                            'recipes',
+                                            args.recipename,
+                                            bbfile))
+        if recipefile:
+            recipefile = recipefile[0]
+        else:
+            raise DevtoolError("Recipe file for %s is not under the workspace" %
+                               args.recipename)
+
+    editor = os.environ.get('EDITOR', None)
+    if not editor:
+        raise DevtoolError("EDITOR environment variable not set")
+
+    import subprocess
+    try:
+        subprocess.check_call('%s "%s"' % (editor, recipefile), shell=True)
+    except subprocess.CalledProcessError as e:
+        return e.returncode
+
+    return 0
+
+def get_default_srctree(config, recipename=''):
+    """Get the default srctree path"""
+    srctreeparent = config.get('General', 'default_source_parent_dir', config.workspace_path)
+    if recipename:
+        return os.path.join(srctreeparent, 'sources', recipename)
+    else:
+        return os.path.join(srctreeparent, 'sources')
+
 def register_commands(subparsers, context):
     """Register devtool subcommands from this plugin"""
+
+    defsrctree = get_default_srctree(context.config)
     parser_add = subparsers.add_parser('add', help='Add a new recipe',
-                                       description='Adds a new recipe')
-    parser_add.add_argument('recipename', help='Name for new recipe to add')
-    parser_add.add_argument('srctree', help='Path to external source tree')
+                                       description='Adds a new recipe to the workspace to build a specified source tree. Can optionally fetch a remote URI and unpack it to create the source tree.')
+    parser_add.add_argument('recipename', nargs='?', help='Name for new recipe to add (just name - no version, path or extension). If not specified, will attempt to auto-detect it.')
+    parser_add.add_argument('srctree', nargs='?', help='Path to external source tree. If not specified, a subdirectory of %s will be used.' % defsrctree)
+    parser_add.add_argument('fetchuri', nargs='?', help='Fetch the specified URI and extract it to create the source tree')
     group = parser_add.add_mutually_exclusive_group()
     group.add_argument('--same-dir', '-s', help='Build in same directory as source', action="store_true")
     group.add_argument('--no-same-dir', help='Force build in a separate build directory', action="store_true")
-    parser_add.add_argument('--fetch', '-f', help='Fetch the specified URI and extract it to create the source tree', metavar='URI')
+    parser_add.add_argument('--fetch', '-f', help='Fetch the specified URI and extract it to create the source tree (deprecated - pass as positional argument instead)', metavar='URI')
     parser_add.add_argument('--version', '-V', help='Version to use within recipe (PV)')
-    parser_add.add_argument('--no-git', '-g', help='If -f/--fetch is specified, do not set up source tree as a git repository', action="store_true")
-    parser_add.add_argument('--binary', '-b', help='Treat the source tree as something that should be installed verbatim (no compilation, same directory structure)', action='store_true')
+    parser_add.add_argument('--no-git', '-g', help='If fetching source, do not set up source tree as a git repository', action="store_true")
+    parser_add.add_argument('--binary', '-b', help='Treat the source tree as something that should be installed verbatim (no compilation, same directory structure). Useful with binary packages e.g. RPMs.', action='store_true')
     parser_add.set_defaults(func=add)
 
     parser_modify = subparsers.add_parser('modify', help='Modify the source for an existing recipe',
-                                       description='Enables modifying the source for an existing recipe',
-                                       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser_modify.add_argument('recipename', help='Name for recipe to edit')
-    parser_modify.add_argument('srctree', help='Path to external source tree')
+                                       description='Enables modifying the source for an existing recipe. You can either provide your own pre-prepared source tree, or specify -x/--extract to extract the source being fetched by the recipe.')
+    parser_modify.add_argument('recipename', help='Name of existing recipe to edit (just name - no version, path or extension)')
+    parser_modify.add_argument('srctree', nargs='?', help='Path to external source tree. If not specified, a subdirectory of %s will be used.' % defsrctree)
     parser_modify.add_argument('--wildcard', '-w', action="store_true", help='Use wildcard for unversioned bbappend')
     parser_modify.add_argument('--extract', '-x', action="store_true", help='Extract source as well')
     group = parser_modify.add_mutually_exclusive_group()
     group.add_argument('--same-dir', '-s', help='Build in same directory as source', action="store_true")
     group.add_argument('--no-same-dir', help='Force build in a separate build directory', action="store_true")
-    parser_modify.add_argument('--branch', '-b', default="devtool", help='Name for development branch to checkout (only when using -x)')
+    parser_modify.add_argument('--branch', '-b', default="devtool", help='Name for development branch to checkout (only when using -x) (default "%(default)s")')
     parser_modify.set_defaults(func=modify)
 
     parser_extract = subparsers.add_parser('extract', help='Extract the source for an existing recipe',
-                                       description='Extracts the source for an existing recipe',
-                                       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser_extract.add_argument('recipename', help='Name for recipe to extract the source for')
+                                       description='Extracts the source for an existing recipe')
+    parser_extract.add_argument('recipename', help='Name of recipe to extract the source for')
     parser_extract.add_argument('srctree', help='Path to where to extract the source tree')
-    parser_extract.add_argument('--branch', '-b', default="devtool", help='Name for development branch to checkout')
+    parser_extract.add_argument('--branch', '-b', default="devtool", help='Name for development branch to checkout (default "%(default)s")')
     parser_extract.add_argument('--keep-temp', action="store_true", help='Keep temporary directory (for debugging)')
-    parser_extract.set_defaults(func=extract)
+    parser_extract.set_defaults(func=extract, no_workspace=True)
+
+    parser_sync = subparsers.add_parser('sync', help='Synchronize the source tree for an existing recipe',
+                                       description='Synchronize the previously extracted source tree for an existing recipe',
+                                       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser_sync.add_argument('recipename', help='Name of recipe to sync the source for')
+    parser_sync.add_argument('srctree', help='Path to the source tree')
+    parser_sync.add_argument('--branch', '-b', default="devtool", help='Name for development branch to checkout')
+    parser_sync.add_argument('--keep-temp', action="store_true", help='Keep temporary directory (for debugging)')
+    parser_sync.set_defaults(func=sync)
 
     parser_update_recipe = subparsers.add_parser('update-recipe', help='Apply changes from external source tree to recipe',
-                                       description='Applies changes from external source tree to a recipe (updating/adding/removing patches as necessary, or by updating SRCREV)')
+                                       description='Applies changes from external source tree to a recipe (updating/adding/removing patches as necessary, or by updating SRCREV). Note that these changes need to have been committed to the git repository in order to be recognised.')
     parser_update_recipe.add_argument('recipename', help='Name of recipe to update')
     parser_update_recipe.add_argument('--mode', '-m', choices=['patch', 'srcrev', 'auto'], default='auto', help='Update mode (where %(metavar)s is %(choices)s; default is %(default)s)', metavar='MODE')
-    parser_update_recipe.add_argument('--initial-rev', help='Starting revision for patches')
+    parser_update_recipe.add_argument('--initial-rev', help='Override starting revision for patches')
     parser_update_recipe.add_argument('--append', '-a', help='Write changes to a bbappend in the specified layer instead of the recipe', metavar='LAYERDIR')
     parser_update_recipe.add_argument('--wildcard-version', '-w', help='In conjunction with -a/--append, use a wildcard to make the bbappend apply to any recipe version', action='store_true')
     parser_update_recipe.add_argument('--no-remove', '-n', action="store_true", help='Don\'t remove patches, only add or update')
     parser_update_recipe.set_defaults(func=update_recipe)
 
     parser_status = subparsers.add_parser('status', help='Show workspace status',
-                                          description='Lists recipes currently in your workspace and the paths to their respective external source trees',
-                                          formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+                                          description='Lists recipes currently in your workspace and the paths to their respective external source trees')
     parser_status.set_defaults(func=status)
 
     parser_reset = subparsers.add_parser('reset', help='Remove a recipe from your workspace',
-                                         description='Removes the specified recipe from your workspace (resetting its state)',
-                                         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+                                         description='Removes the specified recipe from your workspace (resetting its state)')
     parser_reset.add_argument('recipename', nargs='?', help='Recipe to reset')
     parser_reset.add_argument('--all', '-a', action="store_true", help='Reset all recipes (clear workspace)')
     parser_reset.add_argument('--no-clean', '-n', action="store_true", help='Don\'t clean the sysroot to remove recipe output')
     parser_reset.set_defaults(func=reset)
+
+    parser_edit_recipe = subparsers.add_parser('edit-recipe', help='Edit a recipe file in your workspace',
+                                         description='Runs the default editor (as specified by the EDITOR variable) on the specified recipe. Note that the recipe file itself must be in the workspace (i.e. as a result of "devtool add" or "devtool upgrade"); you can override this with the -a/--any-recipe option.')
+    parser_edit_recipe.add_argument('recipename', help='Recipe to edit')
+    parser_edit_recipe.add_argument('--any-recipe', '-a', action="store_true", help='Edit any recipe, not just where the recipe file itself is in the workspace')
+    parser_edit_recipe.set_defaults(func=edit_recipe)

@@ -6,8 +6,8 @@ LICENSE = "GPLv3"
 LIC_FILES_CHKSUM = "file://COPYING;md5=d32239bcb673463ab874e80d47fae504"
 
 
-RDEPENDS_${PN} = "glibc-gconv-ibm850"
-RRECOMMENDS_${PN} = "\
+RDEPENDS_${PN}_libc-glibc = "glibc-gconv-ibm850"
+RRECOMMENDS_${PN}_libc-glibc = "\
 	glibc-gconv-ibm437 \
 	glibc-gconv-ibm737 \
 	glibc-gconv-ibm775 \
@@ -44,4 +44,9 @@ do_install_prepend () {
     # Create bindir to fix parallel installation issues
     mkdir -p ${D}/${bindir}
     mkdir -p ${D}/${datadir}
+}
+
+do_install_append_class-native () {
+    create_wrapper ${D}${bindir}/mcopy \
+        GCONV_PATH=${libdir}/gconv
 }

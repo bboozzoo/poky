@@ -29,10 +29,58 @@ from django.core import validators
 from django.conf import settings
 import django.db.models.signals
 
-
 import logging
 logger = logging.getLogger("toaster")
 
+if 'sqlite' in settings.DATABASES['default']['ENGINE']:
+    from django.db import transaction, OperationalError
+    from time import sleep
+
+    _base_save = models.Model.save
+    def save(self, *args, **kwargs):
+        while True:
+            try:
+                with transaction.atomic():
+                    return _base_save(self, *args, **kwargs)
+            except OperationalError as err:
+                if 'database is locked' in str(err):
+                    logger.warning("%s, model: %s, args: %s, kwargs: %s",
+                                   err, self.__class__, args, kwargs)
+                    sleep(0.5)
+                    continue
+                raise
+
+    models.Model.save = save
+
+    # HACK: Monkey patch Django to fix 'database is locked' issue
+
+    from django.db.models.query import QuerySet
+    _base_insert = QuerySet._insert
+    def _insert(self,  *args, **kwargs):
+        with transaction.atomic(using=self.db, savepoint=False):
+            return _base_insert(self, *args, **kwargs)
+    QuerySet._insert = _insert
+
+    from django.utils import six
+    def _create_object_from_params(self, lookup, params):
+        """
+        Tries to create an object using passed params.
+        Used by get_or_create and update_or_create
+        """
+        try:
+            obj = self.create(**params)
+            return obj, True
+        except IntegrityError:
+            exc_info = sys.exc_info()
+            try:
+                return self.get(**lookup), False
+            except self.model.DoesNotExist:
+                pass
+            six.reraise(*exc_info)
+
+    QuerySet._create_object_from_params = _create_object_from_params
+
+    # end of HACK
 
 class GitURLValidator(validators.URLValidator):
     import re
@@ -91,18 +139,25 @@ class ProjectManager(models.Manager):
 
         return prj
 
-    def create(self, *args, **kwargs):
-        raise Exception("Invalid call to Project.objects.create. Use Project.objects.create_project() to create a project")
-
     # return single object with is_default = True
-    def get_default_project(self):
+    def get_or_create_default_project(self):
         projects = super(ProjectManager, self).filter(is_default = True)
+
         if len(projects) > 1:
-            raise Exception("Inconsistent project data: multiple " +
-                            "default projects (i.e. with is_default=True)")
+            raise Exception('Inconsistent project data: multiple ' +
+                            'default projects (i.e. with is_default=True)')
         elif len(projects) < 1:
-            raise Exception("Inconsistent project data: no default project found")
-        return projects[0]
+            options = {
+                'name': 'Command line builds',
+                'short_description': 'Project for builds started outside Toaster',
+                'is_default': True
+            }
+            project = Project.objects.create(**options)
+            project.save()
+
+            return project
+        else:
+            return projects[0]
 
 class Project(models.Model):
     search_allowed_fields = ['name', 'short_description', 'release__name', 'release__branch_name']
@@ -130,13 +185,12 @@ class Project(models.Model):
         try:
             return self.projectvariable_set.get(name="MACHINE").value
         except (ProjectVariable.DoesNotExist,IndexError):
-            return( "None" );
+            return None;
 
     def get_number_of_builds(self):
-        try:
-            return len(Build.objects.filter( project = self.id ))
-        except (Build.DoesNotExist,IndexError):
-            return( 0 )
+        """Return the number of builds which have ended"""
+
+        return self.build_set.filter(~Q(outcome=Build.IN_PROGRESS)).count()
 
     def get_last_build_id(self):
         try:
@@ -189,61 +243,55 @@ class Project(models.Model):
         except (Variable.DoesNotExist,IndexError):
             return( "not_found" )
 
-    # returns a queryset of compatible layers for a project
-    def compatible_layerversions(self, release = None, layer_name = None):
-        if release == None:
-            release = self.release
-        # layers on the same branch or layers specifically set for this project
-        queryset = Layer_Version.objects.filter((Q(up_branch__name = release.branch_name) & Q(project = None)) | Q(project = self) | Q(build__project = self))
-
-        if layer_name is not None:
-            # we select only a layer name
-            queryset = queryset.filter(layer__name = layer_name)
-
-        # order by layer version priority
-        queryset = queryset.filter(Q(layer_source=None) | Q(layer_source__releaselayersourcepriority__release = release)).select_related('layer_source', 'layer', 'up_branch', "layer_source__releaselayersourcepriority__priority").order_by("-layer_source__releaselayersourcepriority__priority")
+    def get_all_compatible_layer_versions(self):
+        """ Returns Queryset of all Layer_Versions which are compatible with
+        this project"""
+        queryset = Layer_Version.objects.filter(
+            (Q(up_branch__name=self.release.branch_name) & Q(build=None))
+            | Q(project=self))
 
         return queryset
 
-    def projectlayer_equivalent_set(self):
-        return self.compatible_layerversions().filter(layer__name__in = [x.layercommit.layer.name for x in self.projectlayer_set.all()]).select_related("up_branch")
+    def get_project_layer_versions(self, pk=False):
+        """ Returns the Layer_Versions currently added to this project """
+        layer_versions = self.projectlayer_set.all().values('layercommit')
+
+        if pk is False:
+            return layer_versions
+        else:
+            return layer_versions.values_list('layercommit__pk', flat=True)
+
 
     def get_available_machines(self):
         """ Returns QuerySet of all Machines which are provided by the
         Layers currently added to the Project """
-        queryset = Machine.objects.filter(layer_version__in=self.projectlayer_equivalent_set)
+        queryset = Machine.objects.filter(
+            layer_version__in=self.get_project_layer_versions())
+
         return queryset
 
     def get_all_compatible_machines(self):
         """ Returns QuerySet of all the compatible machines available to the
         project including ones from Layers not currently added """
-        compatible_layers = self.compatible_layerversions()
+        queryset = Machine.objects.filter(
+            layer_version__in=self.get_all_compatible_layer_versions())
 
-        queryset = Machine.objects.filter(layer_version__in=compatible_layers)
         return queryset
 
     def get_available_recipes(self):
-        """ Returns QuerySet of all Recipes which are provided by the Layers
-        currently added to the Project """
-        project_layers = self.projectlayer_equivalent_set()
-        queryset = Recipe.objects.filter(layer_version__in = project_layers)
-
-        # Copied from get_all_compatible_recipes
-        search_maxids = map(lambda i: i[0], list(queryset.values('name').distinct().annotate(max_id=Max('id')).values_list('max_id')))
-        queryset = queryset.filter(id__in=search_maxids).select_related('layer_version', 'layer_version__layer', 'layer_version__up_branch', 'layer_source')
-        # End copy
+        """ Returns QuerySet of all the recipes that are provided by layers
+        added to this project """
+        queryset = Recipe.objects.filter(
+            layer_version__in=self.get_project_layer_versions())
 
         return queryset
 
     def get_all_compatible_recipes(self):
         """ Returns QuerySet of all the compatible Recipes available to the
         project including ones from Layers not currently added """
-        compatible_layerversions = self.compatible_layerversions()
-        queryset = Recipe.objects.filter(layer_version__in = compatible_layerversions)
+        queryset = Recipe.objects.filter(
+            layer_version__in=self.get_all_compatible_layer_versions()).exclude(name__exact='')
 
-        search_maxids = map(lambda i: i[0], list(queryset.values('name').distinct().annotate(max_id=Max('id')).values_list('max_id')))
-
-        queryset = queryset.filter(id__in=search_maxids).select_related('layer_version', 'layer_version__layer', 'layer_version__up_branch', 'layer_source')
         return queryset
 
 
@@ -260,7 +308,7 @@ class Project(models.Model):
             for l in self.projectlayer_set.all().order_by("pk"):
                 commit = l.layercommit.get_vcs_reference()
                 print("ii Building layer ", l.layercommit.layer.name, " at vcs point ", commit)
-                BRLayer.objects.create(req = br, name = l.layercommit.layer.name, giturl = l.layercommit.layer.vcs_url, commit = commit, dirpath = l.layercommit.dirpath)
+                BRLayer.objects.create(req = br, name = l.layercommit.layer.name, giturl = l.layercommit.layer.vcs_url, commit = commit, dirpath = l.layercommit.dirpath, layer_version=l.layercommit)
 
             br.state = BuildRequest.REQ_QUEUED
             now = timezone.now()
@@ -270,7 +318,7 @@ class Project(models.Model):
                                 )
             for t in self.projecttarget_set.all():
                 BRTarget.objects.create(req = br, target = t.target, task = t.task)
-                Target.objects.create(build = br.build, target = t.target)
+                Target.objects.create(build = br.build, target = t.target, task = t.task)
 
             for v in self.projectvariable_set.all():
                 BRVariable.objects.create(req = br, name = v.name, value = v.value)
@@ -333,13 +381,14 @@ class Build(models.Model):
         tgts = Target.objects.filter(build_id = self.id).order_by( 'target' );
         return( tgts );
 
-    @property
-    def toaster_exceptions(self):
-        return self.logmessage_set.filter(level=LogMessage.EXCEPTION)
+    def get_outcome_text(self):
+        return Build.BUILD_OUTCOME[int(self.outcome)][1]
 
     @property
     def errors(self):
-        return (self.logmessage_set.filter(level=LogMessage.ERROR)|self.logmessage_set.filter(level=LogMessage.EXCEPTION))
+        return (self.logmessage_set.filter(level=LogMessage.ERROR) |
+                self.logmessage_set.filter(level=LogMessage.EXCEPTION) |
+                self.logmessage_set.filter(level=LogMessage.CRITICAL))
 
     @property
     def warnings(self):
@@ -350,13 +399,26 @@ class Build(models.Model):
         return (self.completed_on - self.started_on).total_seconds()
 
     def get_current_status(self):
+        """
+        get the status string from the build request if the build
+        has one, or the text for the build outcome if it doesn't
+        """
+
         from bldcontrol.models import BuildRequest
-        if self.outcome == Build.IN_PROGRESS and self.buildrequest.state != BuildRequest.REQ_INPROGRESS:
+
+        build_request = None
+        if hasattr(self, 'buildrequest'):
+            build_request = self.buildrequest
+
+        if (build_request
+                and build_request.state != BuildRequest.REQ_INPROGRESS
+                and self.outcome == Build.IN_PROGRESS):
             return self.buildrequest.get_state_display()
-        return self.get_outcome_display()
+        else:
+            return self.get_outcome_text()
 
     def __str__(self):
-        return "%d %s %s" % (self.id, self.project, ",".join([t.target for t in self.target_set.all()]))
+        return "%s %s %s" % (self.id, self.project, ",".join([t.target for t in self.target_set.all()]))
 
 
 # an Artifact is anything that results from a Build, and may be of interest to the user, and is not stored elsewhere
@@ -538,7 +600,7 @@ class Task(models.Model):
     sstate_text  = property(get_sstate_text)
 
     def __unicode__(self):
-        return "%d(%d) %s:%s" % (self.pk, self.build.pk, self.recipe.name, self.task_name)
+        return "%s(%s) %s:%s" % (self.pk, self.build.pk, self.recipe.name, self.task_name)
 
     class Meta:
         ordering = ('order', 'recipe' ,)
@@ -551,7 +613,7 @@ class Task_Dependency(models.Model):
 
 class Package(models.Model):
     search_allowed_fields = ['name', 'version', 'revision', 'recipe__name', 'recipe__version', 'recipe__license', 'recipe__layer_version__layer__name', 'recipe__layer_version__branch', 'recipe__layer_version__commit', 'recipe__layer_version__local_path', 'installed_name']
-    build = models.ForeignKey('Build')
+    build = models.ForeignKey('Build', null=True)
     recipe = models.ForeignKey('Recipe', null=True)
     name = models.CharField(max_length=100)
     installed_name = models.CharField(max_length=100, default='')
@@ -567,8 +629,8 @@ class Package(models.Model):
 class Package_DependencyManager(models.Manager):
     use_for_related_fields = True
 
-    def get_query_set(self):
-        return super(Package_DependencyManager, self).get_query_set().exclude(package_id = F('depends_on__id'))
+    def get_queryset(self):
+        return super(Package_DependencyManager, self).get_queryset().exclude(package_id = F('depends_on__id'))
 
 class Package_Dependency(models.Model):
     TYPE_RDEPENDS = 0
@@ -668,8 +730,8 @@ class Recipe(models.Model):
 class Recipe_DependencyManager(models.Manager):
     use_for_related_fields = True
 
-    def get_query_set(self):
-        return super(Recipe_DependencyManager, self).get_query_set().exclude(recipe_id = F('depends_on__id'))
+    def get_queryset(self):
+        return super(Recipe_DependencyManager, self).get_queryset().exclude(recipe_id = F('depends_on__id'))
 
 class Recipe_Dependency(models.Model):
     TYPE_DEPENDS = 0
@@ -828,6 +890,7 @@ class LayerIndexLayerSource(LayerSource):
         import urllib2, urlparse, json
         import os
         proxy_settings = os.environ.get("http_proxy", None)
+        oe_core_layer = 'openembedded-core'
 
         def _get_json_response(apiurl = self.apiurl):
             _parsedurl = urlparse.urlparse(apiurl)
@@ -872,6 +935,25 @@ class LayerIndexLayerSource(LayerSource):
         if not connection.features.autocommits_when_autocommit_is_off:
             transaction.set_autocommit(False)
         for li in layers_info:
+            # Special case for the openembedded-core layer
+            if li['name'] == oe_core_layer:
+                try:
+                    # If we have an existing openembedded-core for example
+                    # from the toasterconf.json augment the info using the
+                    # layerindex rather than duplicate it
+                    oe_core_l =  Layer.objects.get(name=oe_core_layer)
+                    # Take ownership of the layer as now coming from the
+                    # layerindex
+                    oe_core_l.layer_source = self
+                    oe_core_l.up_id = li['id']
+                    oe_core_l.summary = li['summary']
+                    oe_core_l.description = li['description']
+                    oe_core_l.save()
+                    continue
+
+                except Layer.DoesNotExist:
+                    pass
+
             l, created = Layer.objects.get_or_create(layer_source = self, name = li['name'])
             l.up_id = li['id']
             l.up_date = li['updated']
@@ -882,6 +964,7 @@ class LayerIndexLayerSource(LayerSource):
             l.summary = li['summary']
             l.description = li['description']
             l.save()
+
         if not connection.features.autocommits_when_autocommit_is_off:
             transaction.set_autocommit(True)
 
@@ -974,9 +1057,12 @@ class LayerIndexLayerSource(LayerSource):
                 ro.file_path = ri['filepath'] + "/" + ri['filename']
                 if 'inherits' in ri:
                     ro.is_image = 'image' in ri['inherits'].split()
+                else: # workaround for old style layer index
+                    ro.is_image = "-image-" in ri['pn']
                 ro.save()
             except IntegrityError as e:
                 logger.debug("Failed saving recipe, ignoring: %s (%s:%s)" % (e, ro.layer_version, ri['filepath']+"/"+ri['filename']))
+                ro.delete()
         if not connection.features.autocommits_when_autocommit_is_off:
             transaction.set_autocommit(True)
 
@@ -1129,22 +1215,43 @@ class Layer_Version(models.Model):
         return self._handle_url_path(self.layer.vcs_web_tree_base_url, '')
 
     def get_equivalents_wpriority(self, project):
-        return project.compatible_layerversions(layer_name = self.layer.name)
+        layer_versions = project.get_all_compatible_layer_versions()
+        filtered = layer_versions.filter(layer__name = self.layer.name)
+        return filtered.order_by("-layer_source__releaselayersourcepriority__priority")
 
     def get_vcs_reference(self):
-        if self.commit is not None and len(self.commit) > 0:
-            return self.commit
         if self.branch is not None and len(self.branch) > 0:
             return self.branch
         if self.up_branch is not None:
             return self.up_branch.name
+        if self.commit is not None and len(self.commit) > 0:
+            return self.commit
         return ("Cannot determine the vcs_reference for layer version %s" % vars(self))
 
     def get_detailspage_url(self, project_id):
         return reverse('layerdetails', args=(project_id, self.pk))
 
+    def get_alldeps(self, project_id):
+        """Get full list of unique layer dependencies."""
+        def gen_layerdeps(lver, project):
+            for ldep in lver.dependencies.all():
+                yield ldep.depends_on
+                # get next level of deps recursively calling gen_layerdeps
+                for subdep in gen_layerdeps(ldep.depends_on, project):
+                    yield subdep
+
+        project = Project.objects.get(pk=project_id)
+        result = []
+        projectlvers = [player.layercommit for player in project.projectlayer_set.all()]
+        for dep in gen_layerdeps(self, project):
+            # filter out duplicates and layers already belonging to the project
+            if dep not in result + projectlvers:
+                result.append(dep)
+
+        return sorted(result, key=lambda x: x.layer.name)
+
     def __unicode__(self):
-        return "%d %s (VCS %s, Project %s)" % (self.pk, str(self.layer), self.get_vcs_reference(), self.build.project if self.build is not None else "No project")
+        return "%s %s (VCS %s, Project %s)" % (self.pk, str(self.layer), self.get_vcs_reference(), self.build.project if self.build is not None else "No project")
 
     class Meta:
         unique_together = ("layer_source", "up_id")
@@ -1169,6 +1276,16 @@ class ProjectLayer(models.Model):
 
     class Meta:
         unique_together = (("project", "layercommit"),)
+
+class CustomImageRecipe(models.Model):
+    search_allowed_fields = ['name']
+    name = models.CharField(max_length=100)
+    base_recipe = models.ForeignKey(Recipe)
+    packages = models.ManyToManyField(Package)
+    project = models.ForeignKey(Project)
+
+    class Meta:
+        unique_together = ("name", "project")
 
 class ProjectVariable(models.Model):
     project = models.ForeignKey(Project)
@@ -1206,16 +1323,20 @@ class LogMessage(models.Model):
     INFO = 0
     WARNING = 1
     ERROR = 2
+    CRITICAL = 3
 
-    LOG_LEVEL = ( (INFO, "info"),
-            (WARNING, "warn"),
-            (ERROR, "error"),
-            (EXCEPTION, "toaster exception"))
+    LOG_LEVEL = (
+        (INFO, "info"),
+        (WARNING, "warn"),
+        (ERROR, "error"),
+        (CRITICAL, "critical"),
+        (EXCEPTION, "toaster exception")
+    )
 
     build = models.ForeignKey(Build)
     task  = models.ForeignKey(Task, blank = True, null=True)
     level = models.IntegerField(choices=LOG_LEVEL, default=INFO)
-    message=models.CharField(max_length=240)
+    message = models.TextField(blank=True, null=True)
     pathname = models.FilePathField(max_length=255, blank=True)
     lineno = models.IntegerField(null=True)
 

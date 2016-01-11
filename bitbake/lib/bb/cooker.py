@@ -67,6 +67,14 @@ class CollectionError(bb.BBHandledException):
 class state:
     initial, parsing, running, shutdown, forceshutdown, stopped, error = range(7)
 
+    @classmethod
+    def get_name(cls, code):
+        for name in dir(cls):
+            value = getattr(cls, name)
+            if type(value) == type(cls.initial) and value == code:
+                return name
+        raise ValueError("Invalid status code: %s" % code)
+
 
 class SkippedPackage:
     def __init__(self, info = None, reason = None):
@@ -255,6 +263,11 @@ class BBCooker:
         self.state = state.initial
         self.caches_array = []
 
+        # Need to preserve BB_CONSOLELOG over resets
+        consolelog = None
+        if hasattr(self, "data"):
+            consolelog = self.data.getVar("BB_CONSOLELOG", True)
+
         if CookerFeatures.BASEDATASTORE_TRACKING in self.featureset:
             self.enableDataTracking()
 
@@ -281,6 +294,8 @@ class BBCooker:
         self.data = self.databuilder.data
         self.data_hash = self.databuilder.data_hash
 
+        if consolelog:
+            self.data.setVar("BB_CONSOLELOG", consolelog)
 
         # we log all events to a file if so directed
         if self.configuration.writeeventlog:
@@ -531,6 +546,11 @@ class BBCooker:
         for o in options:
             if o in ['prefile', 'postfile']:
                 clean = False
+                server_val = getattr(self.configuration, "%s_server" % o)
+                if not options[o] and server_val:
+                    # restore value provided on server start
+                    setattr(self.configuration, o, server_val)
+                    continue
             setattr(self.configuration, o, options[o])
         for k in bb.utils.approved_variables():
             if k in environment and k not in self.configuration.env:
@@ -1007,22 +1027,21 @@ class BBCooker:
 
     def findFilesMatchingInDir(self, filepattern, directory):
         """
-        Searches for files matching the regex 'pattern' which are children of
+        Searches for files containing the substring 'filepattern' which are children of
         'directory' in each BBPATH. i.e. to find all rootfs package classes available
         to BitBake one could call findFilesMatchingInDir(self, 'rootfs_', 'classes')
         or to find all machine configuration files one could call:
-        findFilesMatchingInDir(self, 'conf/machines', 'conf')
+        findFilesMatchingInDir(self, '.conf', 'conf/machine')
         """
 
         matches = []
-        p = re.compile(re.escape(filepattern))
         bbpaths = self.data.getVar('BBPATH', True).split(':')
         for path in bbpaths:
             dirpath = os.path.join(path, directory)
             if os.path.exists(dirpath):
                 for root, dirs, files in os.walk(dirpath):
                     for f in files:
-                        if p.search(f):
+                        if filepattern in f:
                             matches.append(f)
 
         if matches:
@@ -1060,7 +1079,7 @@ class BBCooker:
 
         for pfn in self.recipecache.pkg_fn:
             inherits = self.recipecache.inherits.get(pfn, None)
-            if inherits and inherits.count(klass) > 0:
+            if inherits and klass in inherits:
                 pkg_list.append(self.recipecache.pkg_fn[pfn])
 
         return pkg_list
@@ -1391,10 +1410,28 @@ class BBCooker:
         build.reset_cache()
         self.buildSetVars()
 
+        # If we are told to do the None task then query the default task
+        if (task == None):
+            task = self.configuration.cmd
+
+        if not task.startswith("do_"):
+            task = "do_%s" % task
+
         taskdata, runlist, fulltargetlist = self.buildTaskData(targets, task, self.configuration.abort)
 
         buildname = self.data.getVar("BUILDNAME", False)
-        bb.event.fire(bb.event.BuildStarted(buildname, fulltargetlist), self.data)
+
+        # make targets to always look as <target>:do_<task>
+        ntargets = []
+        for target in fulltargetlist:
+            if ":" in target:
+                if ":do_" not in target:
+                    target = "%s:do_%s" % tuple(target.split(":", 1))
+            else:
+                target = "%s:%s" % (target, task)
+            ntargets.append(target)
+
+        bb.event.fire(bb.event.BuildStarted(buildname, ntargets), self.data)
 
         rq = bb.runqueue.RunQueue(self, self.data, self.recipecache, taskdata, runlist)
         if 'universe' in targets:
@@ -2093,11 +2130,6 @@ class CookerParser(object):
             self.error += 1
             _, value, _ = sys.exc_info()
             logger.error('ExpansionError during parsing %s: %s', value.recipe, str(exc))
-            self.shutdown(clean=False)
-            return False
-        except SyntaxError as exc:
-            self.error += 1
-            logger.error('Unable to parse %s', exc.recipe)
             self.shutdown(clean=False)
             return False
         except Exception as exc:

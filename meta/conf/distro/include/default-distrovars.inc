@@ -24,15 +24,13 @@ IMAGE_FEATURES ?= ""
 # This is a list of packages that are used by the build system to build the distribution, they are not
 # directly part of the distribution. 
 HOSTTOOLS_WHITELIST_GPL-3.0 ?= ""
-WHITELIST_GPL-3.0 ?= "less"
+WHITELIST_GPL-3.0 ?= ""
 LGPLv2_WHITELIST_GPL-3.0 ?= "libassuan gnutls libtasn1 libidn"
 
 COMMERCIAL_AUDIO_PLUGINS ?= ""
 # COMMERCIAL_AUDIO_PLUGINS ?= "gst-plugins-ugly-mad gst-plugins-ugly-mpegaudioparse"
 COMMERCIAL_VIDEO_PLUGINS ?= ""
 # COMMERCIAL_VIDEO_PLUGINS ?= "gst-plugins-ugly-mpeg2dec gst-plugins-ugly-mpegstream gst-plugins-bad-mpegvideoparse"
-COMMERCIAL_QT ?= ""
-# COMMERCIAL_QT ?= "qmmp"
 # Set of common licenses used for license.bbclass
 COMMON_LICENSE_DIR ??= "${COREBASE}/meta/files/common-licenses"
 
@@ -47,3 +45,6 @@ DISTRO_VERSION ??= "nodistro.0"
 
 # Missing checksums should raise an error
 BB_STRICT_CHECKSUM = "1"
+
+GTK2DISTROFEATURES = "directfb x11"
+GTK3DISTROFEATURES = "x11 wayland"

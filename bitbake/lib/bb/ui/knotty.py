@@ -104,10 +104,11 @@ class InteractConsoleLogFilter(logging.Filter):
         return True
 
 class TerminalFilter(object):
+    rows = 25
     columns = 80
 
     def sigwinch_handle(self, signum, frame):
-        self.columns = self.getTerminalColumns()
+        self.rows, self.columns = self.getTerminalColumns()
         if self._sigwinch_default:
             self._sigwinch_default(signum, frame)
 
@@ -131,7 +132,7 @@ class TerminalFilter(object):
                 cr = (env['LINES'], env['COLUMNS'])
             except:
                 cr = (25, 80)
-        return cr[1]
+        return cr
 
     def __init__(self, main, helper, console, errconsole, format):
         self.main = main
@@ -170,9 +171,13 @@ class TerminalFilter(object):
                 signal.signal(signal.SIGWINCH, self.sigwinch_handle)
             except:
                 pass
-            self.columns = self.getTerminalColumns()
+            self.rows, self.columns = self.getTerminalColumns()
         except:
             self.cuu = None
+        if not self.cuu:
+            self.interactive = False
+            bb.note("Unable to use interactive mode for this terminal, using fallback")
+            return
         console.addFilter(InteractConsoleLogFilter(self, format))
         errconsole.addFilter(InteractConsoleLogFilter(self, format))
 
@@ -207,7 +212,7 @@ class TerminalFilter(object):
             content = "Currently %s running tasks (%s of %s):" % (len(activetasks), self.helper.tasknumber_current, self.helper.tasknumber_total)
         print(content)
         lines = 1 + int(len(content) / (self.columns + 1))
-        for tasknum, task in enumerate(tasks):
+        for tasknum, task in enumerate(tasks[:(self.rows - 2)]):
             content = "%s: %s" % (tasknum, task)
             print(content)
             lines = lines + 1 + int(len(content) / (self.columns + 1))
@@ -230,7 +235,7 @@ def _log_settings_from_server(server):
     if error:
         logger.error("Unable to get the value of BBINCLUDELOGS_LINES variable: %s" % error)
         raise BaseException(error)
-    consolelogfile, error = server.runCommand(["getVariable", "BB_CONSOLELOG"])
+    consolelogfile, error = server.runCommand(["getSetVariable", "BB_CONSOLELOG"])
     if error:
         logger.error("Unable to get the value of BB_CONSOLELOG variable: %s" % error)
         raise BaseException(error)
@@ -532,10 +537,12 @@ def main(server, eventHandler, params, tf = TerminalFilter):
             main.shutdown = main.shutdown + 1
             pass
         except Exception as e:
-            sys.stderr.write(str(e))
+            import traceback
+            sys.stderr.write(traceback.format_exc())
             if not params.observe_only:
                 _, error = server.runCommand(["stateForceShutdown"])
             main.shutdown = 2
+            return_value = 1
     try:
         summary = ""
         if taskfailures:

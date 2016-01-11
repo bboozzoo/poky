@@ -63,9 +63,9 @@ class ConfigParameters(object):
             raise Exception("Unable to set configuration option 'cmd' on the server: %s" % error)
 
         if not self.options.pkgs_to_build:
-            bbpkgs, error = server.runCommand(["getVariable", "BBPKGS"])
+            bbpkgs, error = server.runCommand(["getVariable", "BBTARGETS"])
             if error:
-                raise Exception("Unable to get the value of BBPKGS from the server: %s" % error)
+                raise Exception("Unable to get the value of BBTARGETS from the server: %s" % error)
             if bbpkgs:
                 self.options.pkgs_to_build.extend(bbpkgs.split())
 
@@ -129,6 +129,8 @@ class CookerConfiguration(object):
         self.extra_assume_provided = []
         self.prefile = []
         self.postfile = []
+        self.prefile_server = []
+        self.postfile_server = []
         self.debug = 0
         self.cmd = None
         self.abort = True
@@ -315,7 +317,9 @@ class CookerDataBuilder(object):
         # Nomally we only register event handlers at the end of parsing .bb files
         # We register any handlers we've found so far here...
         for var in data.getVar('__BBHANDLERS', False) or []:
-            bb.event.register(var, data.getVar(var, False),  (data.getVarFlag(var, "eventmask", True) or "").split())
+            handlerfn = data.getVarFlag(var, "filename", False)
+            handlerln = int(data.getVarFlag(var, "lineno", False))
+            bb.event.register(var, data.getVar(var, False),  (data.getVarFlag(var, "eventmask", True) or "").split(), handlerfn, handlerln)
 
         if data.getVar("BB_WORKERCONTEXT", False) is None:
             bb.fetch.fetcher_init(data)

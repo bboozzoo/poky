@@ -32,7 +32,7 @@ WARN_QA ?= "ldflags useless-rpaths rpaths staticdev libdir xorg-driver-abi \
             installed-vs-shipped compile-host-path install-host-path \
             pn-overrides infodir build-deps file-rdeps \
             unknown-configure-option symlink-to-sysroot multilib \
-            invalid-pkgconfig host-user-contaminated \
+            invalid-packageconfig host-user-contaminated \
             "
 ERROR_QA ?= "dev-so debug-deps dev-deps debug-files arch pkgconfig la \
             perms dep-cmp pkgvarcheck perm-config perm-line perm-link \
@@ -167,7 +167,7 @@ def package_qa_get_machine_dict():
 
 def package_qa_clean_path(path,d):
     """ Remove the common prefix from the path. In this case it is the TMPDIR"""
-    return path.replace(d.getVar('TMPDIR',True),"")
+    return path.replace(d.getVar("TMPDIR", True) + "/", "")
 
 def package_qa_write_error(type, error, d):
     logfile = d.getVar('QA_LOGFILE', True)
@@ -292,6 +292,7 @@ def package_qa_check_libdir(d):
     pkgdest = d.getVar('PKGDEST', True)
     base_libdir = d.getVar("base_libdir",True) + os.sep
     libdir = d.getVar("libdir", True) + os.sep
+    libexecdir = d.getVar("libexecdir", True) + os.sep
     exec_prefix = d.getVar("exec_prefix", True) + os.sep
 
     messages = []
@@ -307,6 +308,9 @@ def package_qa_check_libdir(d):
                 if 'libdir' in (d.getVar('INSANE_SKIP_' + package, True) or "").split():
                     bb.note("Package %s skipping libdir QA test" % (package))
                     skippackages.append(package)
+                elif d.getVar('PACKAGE_DEBUG_SPLIT_STYLE', True) == 'debug-file-directory' and package.endswith("-dbg"):
+                    bb.note("Package %s skipping libdir QA test for PACKAGE_DEBUG_SPLIT_STYLE equals debug-file-directory" % (package))
+                    skippackages.append(package)
             for package in skippackages:
                 dirs.remove(package)
         for file in files:
@@ -319,7 +323,7 @@ def package_qa_check_libdir(d):
                     if base_libdir not in rel_path:
                         messages.append("%s: found library in wrong location: %s" % (package, rel_path))
                 if exec_re.match(rel_path):
-                    if libdir not in rel_path:
+                    if libdir not in rel_path and libexecdir not in rel_path:
                         messages.append("%s: found library in wrong location: %s" % (package, rel_path))
 
     if messages:
@@ -1112,6 +1116,7 @@ python do_package_qa () {
     bb.note("DONE with PACKAGE QA")
 }
 
+do_package_qa[vardepsexclude] = "BB_TASKDEPDATA"
 do_package_qa[rdeptask] = "do_packagedata"
 addtask do_package_qa after do_packagedata do_package before do_build
 
@@ -1146,7 +1151,7 @@ python do_qa_configure() {
         if "config.log" in files:
             if subprocess.call(statement, shell=True) == 0:
                 bb.fatal("""This autoconf log indicates errors, it looked at host include and/or library paths while determining system capabilities.
-Rerun configure task after fixing this. The path was '%s'""" % root)
+Rerun configure task after fixing this.""")
 
         if "configure.ac" in files:
             configs.append(os.path.join(root,"configure.ac"))
@@ -1210,7 +1215,7 @@ Missing inherit gettext?""" % (gt, config))
             if pconfig not in pkgconfigflags:
                 pn = d.getVar('PN', True)
                 error_msg = "%s: invalid PACKAGECONFIG: %s" % (pn, pconfig)
-                package_qa_handle_error("invalid-pkgconfig", error_msg, d)
+                package_qa_handle_error("invalid-packageconfig", error_msg, d)
 }
 
 python do_qa_unpack() {

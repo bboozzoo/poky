@@ -383,6 +383,13 @@ def bitbake_main(configParams, configuration):
         # Collect the feature set for the UI
         featureset = getattr(ui_module, "featureSet", [])
 
+    if configParams.server_only:
+        for param in ('prefile', 'postfile'):
+            value = getattr(configParams, param)
+            if value:
+                setattr(configuration, "%s_server" % param, value)
+                param = "%s_server" % param
+
     if not configParams.remote_server:
         # we start a server with a given configuration
         server = start_server(servermodule, configParams, configuration, featureset)
@@ -399,6 +406,13 @@ def bitbake_main(configParams, configuration):
         except Exception as e:
             bb.fatal("Could not connect to server %s: %s" % (configParams.remote_server, str(e)))
 
+        if configParams.kill_server:
+            server_connection.connection.terminateServer()
+            bb.event.ui_queue = []
+            return 0
+
+        server_connection.setupEventQueue()
+
         # Restore the environment in case the UI needs it
         for k in cleanedvars:
             os.environ[k] = cleanedvars[k]
@@ -408,11 +422,6 @@ def bitbake_main(configParams, configuration):
 
         if configParams.status_only:
             server_connection.terminate()
-            return 0
-
-        if configParams.kill_server:
-            server_connection.connection.terminateServer()
-            bb.event.ui_queue = []
             return 0
 
         try:

@@ -22,12 +22,11 @@ class ImageFeatures(oeSelfTest):
         AutomatedBy: Daniel Istrate <daniel.alexandrux.istrate@intel.com>
         """
 
-        features = 'EXTRA_IMAGE_FEATURES = "ssh-server-openssh empty-root-password allow-empty-password"\n'
+        features = 'MACHINE = "qemux86"\n'
+        features += 'EXTRA_IMAGE_FEATURES = "ssh-server-openssh empty-root-password allow-empty-password"\n'
         features += 'INHERIT += "extrausers"\n'
         features += 'EXTRA_USERS_PARAMS = "useradd -p \'\' {}; usermod -s /bin/sh {};"'.format(self.test_user, self.test_user)
-
-        # Append 'features' to local.conf
-        self.append_config(features)
+        self.write_config(features)
 
         # Build a core-image-minimal
         bitbake('core-image-minimal')
@@ -50,12 +49,11 @@ class ImageFeatures(oeSelfTest):
         AutomatedBy: Daniel Istrate <daniel.alexandrux.istrate@intel.com>
         """
 
-        features = 'EXTRA_IMAGE_FEATURES = "ssh-server-openssh allow-empty-password"\n'
+        features = 'MACHINE = "qemux86"\n'
+        features += 'EXTRA_IMAGE_FEATURES = "ssh-server-openssh allow-empty-password"\n'
         features += 'INHERIT += "extrausers"\n'
         features += 'EXTRA_USERS_PARAMS = "useradd -p \'\' {}; usermod -s /bin/sh {};"'.format(self.test_user, self.test_user)
-
-        # Append 'features' to local.conf
-        self.append_config(features)
+        self.write_config(features)
 
         # Build a core-image-minimal
         bitbake('core-image-minimal')
@@ -81,15 +79,14 @@ class ImageFeatures(oeSelfTest):
         AutomatedBy: Daniel Istrate <daniel.alexandrux.istrate@intel.com>
         """
 
-        features = 'PREFERRED_VERSION_rpm = "4.%"\n'
+        features = 'MACHINE = "qemux86"\n'
+        features += 'PREFERRED_VERSION_rpm = "4.%"\n'
         features += 'PREFERRED_VERSION_rpm-native = "4.%"\n'
         # Use openssh in IMAGE_INSTALL instead of ssh-server-openssh in EXTRA_IMAGE_FEATURES as a workaround for bug 8047
         features += 'IMAGE_INSTALL_append = " openssh"\n'
         features += 'EXTRA_IMAGE_FEATURES = "empty-root-password allow-empty-password package-management"\n'
         features += 'RPMROOTFSDEPENDS_remove = "rpmresolve-native:do_populate_sysroot"'
-
-        # Append 'features' to local.conf
-        self.append_config(features)
+        self.write_config(features)
 
         # Build a core-image-minimal
         bitbake('core-image-minimal')
@@ -159,9 +156,7 @@ class ImageFeatures(oeSelfTest):
 
         features = 'DISTRO_FEATURES_append = " wayland"\n'
         features += 'CORE_IMAGE_EXTRA_INSTALL += "wayland weston"'
-
-        # Append 'features' to local.conf
-        self.append_config(features)
+        self.write_config(features)
 
         # Build a core-image-weston
         bitbake('core-image-weston')

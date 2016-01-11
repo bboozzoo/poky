@@ -36,14 +36,14 @@ RPMTESTSUITE = "${@bb.utils.contains('IMAGE_PKGTYPE', 'rpm', 'smart rpm', '', d)
 
 DEFAULT_TEST_SUITES = "ping auto"
 DEFAULT_TEST_SUITES_pn-core-image-minimal = "ping"
-DEFAULT_TEST_SUITES_pn-core-image-sato = "ping ssh df connman syslog xorg scp vnc date dmesg parselogs ${RPMTESTSUITE} \
+DEFAULT_TEST_SUITES_pn-core-image-sato = "ping ssh df connman syslog xorg scp date parselogs ${RPMTESTSUITE} \
     ${@bb.utils.contains('IMAGE_PKGTYPE', 'rpm', 'python', '', d)}"
-DEFAULT_TEST_SUITES_pn-core-image-sato-sdk = "ping ssh df connman syslog xorg scp vnc date perl ldd gcc kernelmodule dmesg python parselogs ${RPMTESTSUITE}"
+DEFAULT_TEST_SUITES_pn-core-image-sato-sdk = "ping ssh df connman syslog xorg scp date perl ldd gcc kernelmodule python parselogs ${RPMTESTSUITE}"
 DEFAULT_TEST_SUITES_pn-core-image-lsb-sdk = "ping buildcvs buildiptables buildsudoku connman date df gcc kernelmodule ldd pam parselogs perl python scp ${RPMTESTSUITE} ssh syslog logrotate"
 DEFAULT_TEST_SUITES_pn-meta-toolchain = "auto"
 
 # aarch64 has no graphics
-DEFAULT_TEST_SUITES_remove_aarch64 = "xorg vnc"
+DEFAULT_TEST_SUITES_remove_aarch64 = "xorg"
 
 #qemumips is too slow for buildsudoku
 DEFAULT_TEST_SUITES_remove_qemumips = "buildsudoku"
@@ -80,11 +80,13 @@ testimage_dump_target () {
 
 testimage_dump_host () {
     top -bn1
+    iostat -x -z -N -d -p ALL 20 2
     ps -ef
     free
     df
     memstat
     dmesg
+    ip -s link
     netstat -an
 }
 
@@ -146,6 +148,10 @@ def get_tests_list(d, type="runtime"):
                     testslist.append("oeqa." + type + "." + testname)
                     found = True
                     break
+                elif os.path.exists(os.path.join(p, 'lib', 'oeqa', type, testname.split(".")[0] + '.py')):
+                    testslist.append("oeqa." + type + "." + testname)
+                    found = True
+                    break
             if not found:
                 bb.fatal('Test %s specified in TEST_SUITES could not be found in lib/oeqa/runtime under BBPATH' % testname)
 
@@ -172,6 +178,7 @@ def exportTests(d,tc):
     import json
     import shutil
     import pkgutil
+    import re
 
     exportpath = d.getVar("TEST_EXPORT_DIR", True)
 
@@ -198,8 +205,17 @@ def exportTests(d,tc):
     savedata["host_dumper"]["parent_dir"] = tc.host_dumper.parent_dir
     savedata["host_dumper"]["cmds"] = tc.host_dumper.cmds
 
-    with open(os.path.join(exportpath, "testdata.json"), "w") as f:
+    json_file = os.path.join(exportpath, "testdata.json")
+    with open(json_file, "w") as f:
             json.dump(savedata, f, skipkeys=True, indent=4, sort_keys=True)
+
+    # Replace absolute path with relative in the file
+    exclude_path = os.path.join(d.getVar("COREBASE", True),'meta','lib','oeqa')
+    f1 = open(json_file,'r').read()
+    f2 = open(json_file,'w')
+    m = f1.replace(exclude_path,'oeqa')
+    f2.write(m)
+    f2.close()
 
     # now start copying files
     # we'll basically copy everything under meta/lib/oeqa, with these exceptions
@@ -213,9 +229,23 @@ def exportTests(d,tc):
     bb.utils.mkdirhier(os.path.join(exportpath, "oeqa/runtime/files"))
     bb.utils.mkdirhier(os.path.join(exportpath, "oeqa/utils"))
     # copy test modules, this should cover tests in other layers too
+    bbpath = d.getVar("BBPATH", True).split(':')
     for t in tc.testslist:
+        isfolder = False
+        if re.search("\w+\.\w+\.test_\S+", t):
+            t = '.'.join(t.split('.')[:3])
         mod = pkgutil.get_loader(t)
-        shutil.copy2(mod.filename, os.path.join(exportpath, "oeqa/runtime"))
+        # More depth than usual?
+        if (t.count('.') > 2):
+            for p in bbpath:
+                foldername = os.path.join(p, 'lib',  os.sep.join(t.split('.')).rsplit(os.sep, 1)[0])
+                if os.path.isdir(foldername):
+                    isfolder = True
+                    target_folder = os.path.join(exportpath, "oeqa", "runtime", os.path.basename(foldername))
+                    if not os.path.exists(target_folder):
+                        shutil.copytree(foldername, target_folder)
+        if not isfolder:
+            shutil.copy2(mod.filename, os.path.join(exportpath, "oeqa/runtime"))
     # copy __init__.py files
     oeqadir = pkgutil.get_loader("oeqa").filename
     shutil.copy2(os.path.join(oeqadir, "__init__.py"), os.path.join(exportpath, "oeqa"))

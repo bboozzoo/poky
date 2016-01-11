@@ -26,12 +26,12 @@
 import operator,re
 
 from django.db.models import F, Q, Sum, Count, Max
-from django.db import IntegrityError
+from django.db import IntegrityError, Error
 from django.shortcuts import render, redirect
 from orm.models import Build, Target, Task, Layer, Layer_Version, Recipe, LogMessage, Variable
 from orm.models import Task_Dependency, Recipe_Dependency, Package, Package_File, Package_Dependency
 from orm.models import Target_Installed_Package, Target_File, Target_Image_File, BuildArtifact
-from orm.models import BitbakeVersion
+from orm.models import BitbakeVersion, CustomImageRecipe
 from bldcontrol import bbcontroller
 from django.views.decorators.cache import cache_control
 from django.core.urlresolvers import reverse, resolve
@@ -45,32 +45,46 @@ from django.utils import formats
 from toastergui.templatetags.projecttags import json as jsonfilter
 import json
 from os.path import dirname
+from functools import wraps
 import itertools
+import mimetypes
 
-import magic
 import logging
 
 logger = logging.getLogger("toaster")
 
 class MimeTypeFinder(object):
-    _magic = magic.Magic(flags = magic.MAGIC_MIME_TYPE)
+    # setting this to False enables additional non-standard mimetypes
+    # to be included in the guess
+    _strict = False
 
-    # returns the mimetype for a file path
+    # returns the mimetype for a file path as a string,
+    # or 'application/octet-stream' if the type couldn't be guessed
     @classmethod
     def get_mimetype(self, path):
-        return self._magic.id_filename(path)
+        guess = mimetypes.guess_type(path, self._strict)
+        guessed_type = guess[0]
+        if guessed_type == None:
+            guessed_type = 'application/octet-stream'
+        return guessed_type
 
 # all new sessions should come through the landing page;
 # determine in which mode we are running in, and redirect appropriately
 def landing(request):
+    # in build mode, we redirect to the command-line builds page
+    # if there are any builds for the default (cli builds) project
+    default_project = Project.objects.get_or_create_default_project()
+    default_project_builds = Build.objects.filter(project = default_project)
+
     # we only redirect to projects page if there is a user-generated project
+    num_builds = Build.objects.all().count()
     user_projects = Project.objects.filter(is_default = False)
     has_user_project = user_projects.count() > 0
 
-    if Build.objects.count() == 0 and has_user_project:
+    if num_builds == 0 and has_user_project:
         return redirect(reverse('all-projects'), permanent = False)
 
-    if Build.objects.all().count() > 0:
+    if num_builds > 0:
         return redirect(reverse('all-builds'), permanent = False)
 
     context = {'lvs_nos' : Layer_Version.objects.all().count()}
@@ -85,8 +99,8 @@ def _get_latest_builds(prj=None):
         queryset = queryset.filter(project = prj)
 
     return list(itertools.chain(
-        queryset.filter(outcome=Build.IN_PROGRESS).order_by("-pk"),
-        queryset.filter(outcome__lt=Build.IN_PROGRESS).order_by("-pk")[:3] ))
+        queryset.filter(outcome=Build.IN_PROGRESS).order_by("-started_on"),
+        queryset.filter(outcome__lt=Build.IN_PROGRESS).order_by("-started_on")[:3] ))
 
 
 # a JSON-able dict of recent builds; for use in the Project page, xhr_ updates,  and other places, as needed
@@ -1215,7 +1229,7 @@ def tasks_common(request, build_id, variant, task_anchor):
     context = { 'objectname': variant,
                 'object_search_display': object_search_display,
                 'filter_search_display': filter_search_display,
-                'title': title_variant,
+                'mainheading': title_variant,
                 'build': build,
                 'objects': task_objects,
                 'default_orderby' : orderby,
@@ -1862,11 +1876,17 @@ def image_information_dir(request, build_id, target_id, packagefile_id):
     return redirect(builds)
     # the context processor that supplies data used across all the pages
 
-
+# a context processor which runs on every request; this provides the
+# projects and non_cli_projects (i.e. projects created by the user)
+# variables referred to in templates, which used to determine the
+# visibility of UI elements like the "New build" button
 def managedcontextprocessor(request):
+    projects = Project.objects.all()
     ret = {
-        "projects": Project.objects.all(),
+        "projects": projects,
+        "non_cli_projects": projects.exclude(is_default=True),
         "DEBUG" : toastermain.settings.DEBUG,
+        "CUSTOM_IMAGE" : toastermain.settings.CUSTOM_IMAGE,
         "TOASTER_BRANCH": toastermain.settings.TOASTER_BRANCH,
         "TOASTER_REVISION" : toastermain.settings.TOASTER_REVISION,
     }
@@ -1982,7 +2002,7 @@ if True:
         build_info = _build_page_range(Paginator(queryset, pagesize), request.GET.get('page', 1))
 
         # build view-specific information; this is rendered specifically in the builds page, at the top of the page (i.e. Recent builds)
-        build_mru = Build.objects.order_by("-started_on")[:3]
+        build_mru = _get_latest_builds()[:3]
 
         # calculate the exact begining of local today and yesterday, append context
         context_date,today_begin,yesterday_begin = _add_daterange_context(queryset_all, request, {'started_on','completed_on'})
@@ -2101,35 +2121,38 @@ if True:
                     },
                     {'name': 'Errors', 'clclass': 'errors_no',
                      'qhelp': "How many errors were encountered during the build (if any)",
-                     'orderfield': _get_toggle_order(request, "errors_no", True),
-                     'ordericon':_get_toggle_order_icon(request, "errors_no"),
-                     'orderkey' : 'errors_no',
-                     'filter' : {'class' : 'errors_no',
-                                 'label': 'Show:',
-                                 'options' : [
-                                             ('Builds with errors', 'errors_no__gte:1', queryset_with_search.filter(errors_no__gte=1).count()),
-                                             ('Builds without errors', 'errors_no:0', queryset_with_search.filter(errors_no=0).count()),
-                                             ]
-                                }
+                     # Comment out sorting and filter until YOCTO #8131 is fixed
+                     #'orderfield': _get_toggle_order(request, "errors_no", True),
+                     #'ordericon':_get_toggle_order_icon(request, "errors_no"),
+                     #'orderkey' : 'errors_no',
+                     #'filter' : {'class' : 'errors_no',
+                     #            'label': 'Show:',
+                     #            'options' : [
+                     #                        ('Builds with errors', 'errors_no__gte:1', queryset_with_search.filter(errors_no__gte=1).count()),
+                     #                        ('Builds without errors', 'errors_no:0', queryset_with_search.filter(errors_no=0).count()),
+                     #                        ]
+                     #           }
                     },
                     {'name': 'Warnings', 'clclass': 'warnings_no',
                      'qhelp': "How many warnings were encountered during the build (if any)",
-                     'orderfield': _get_toggle_order(request, "warnings_no", True),
-                     'ordericon':_get_toggle_order_icon(request, "warnings_no"),
-                     'orderkey' : 'warnings_no',
-                     'filter' : {'class' : 'warnings_no',
-                                 'label': 'Show:',
-                                 'options' : [
-                                             ('Builds with warnings','warnings_no__gte:1', queryset_with_search.filter(warnings_no__gte=1).count()),
-                                             ('Builds without warnings','warnings_no:0', queryset_with_search.filter(warnings_no=0).count()),
-                                             ]
-                                }
+                     # Comment out sorting and filter until YOCTO #8131 is fixed
+                     #'orderfield': _get_toggle_order(request, "warnings_no", True),
+                     #'ordericon':_get_toggle_order_icon(request, "warnings_no"),
+                     #'orderkey' : 'warnings_no',
+                     #'filter' : {'class' : 'warnings_no',
+                     #            'label': 'Show:',
+                     #            'options' : [
+                     #                        ('Builds with warnings','warnings_no__gte:1', queryset_with_search.filter(warnings_no__gte=1).count()),
+                     #                        ('Builds without warnings','warnings_no:0', queryset_with_search.filter(warnings_no=0).count()),
+                     #                        ]
+                     #           }
                     },
                     {'name': 'Time', 'clclass': 'time', 'hidden' : 1,
                      'qhelp': "How long it took the build to finish",
-                     'orderfield': _get_toggle_order(request, "timespent", True),
-                     'ordericon':_get_toggle_order_icon(request, "timespent"),
-                     'orderkey' : 'timespent',
+                     # Comment out sorting until YOCTO #8131 is fixed
+                     #'orderfield': _get_toggle_order(request, "timespent", True),
+                     #'ordericon':_get_toggle_order_icon(request, "timespent"),
+                     #'orderkey' : 'timespent',
                     },
                     {'name': 'Image files', 'clclass': 'output',
                      'qhelp': "The root file system types produced by the build. You can find them in your <code>/build/tmp/deploy/images/</code> directory",
@@ -2241,16 +2264,17 @@ if True:
                 prj.bitbake_version = prj.release.bitbake_version
                 prj.save()
                 # we need to change the layers
-                for i in prj.projectlayer_set.all():
+                for project in prj.projectlayer_set.all():
                     # find and add a similarly-named layer on the new branch
                     try:
-                        lv = prj.compatible_layerversions(layer_name = i.layercommit.layer.name)[0]
-                        ProjectLayer.objects.get_or_create(project = prj, layercommit = lv)
+                        layer_versions = prj.get_all_compatible_layer_versions()
+                        layer_versions = layer_versions.filter(layer__name = project.layercommit.layer.name)
+                        ProjectLayer.objects.get_or_create(project = prj, layercommit = layer_versions.first())
                     except IndexError:
                         pass
                     finally:
                         # get rid of the old entry
-                        i.delete()
+                        project.delete()
 
             if 'machineName' in request.POST:
                 machinevar = prj.projectvariable_set.get(name="MACHINE")
@@ -2313,21 +2337,33 @@ if True:
 
         return context
 
+    def xhr_response(fun):
+        """
+        Decorator for REST methods.
+        calls jsonfilter on the returned dictionary and returns result
+        as HttpResponse object of content_type application/json
+        """
+        @wraps(fun)
+        def wrapper(*args, **kwds):
+            return HttpResponse(jsonfilter(fun(*args, **kwds)),
+                                content_type="application/json")
+        return wrapper
+
     def jsunittests(request):
-      """ Provides a page for the js unit tests """
-      bbv = BitbakeVersion.objects.filter(branch="master").first()
-      release = Release.objects.filter(bitbake_version=bbv).first()
+        """ Provides a page for the js unit tests """
+        bbv = BitbakeVersion.objects.filter(branch="master").first()
+        release = Release.objects.filter(bitbake_version=bbv).first()
 
-      name = "_js_unit_test_prj_"
+        name = "_js_unit_test_prj_"
 
-      # If there is an existing project by this name delete it. We don't want
-      # Lots of duplicates cluttering up the projects.
-      Project.objects.filter(name=name).delete()
+        # If there is an existing project by this name delete it. We don't want
+        # Lots of duplicates cluttering up the projects.
+        Project.objects.filter(name=name).delete()
 
-      new_project = Project.objects.create_project(name=name, release=release)
+        new_project = Project.objects.create_project(name=name, release=release)
 
-      context = { 'project' : new_project }
-      return render(request, "js-unit-tests.html", context)
+        context = { 'project' : new_project }
+        return render(request, "js-unit-tests.html", context)
 
     from django.views.decorators.csrf import csrf_exempt
     @csrf_exempt
@@ -2348,12 +2384,17 @@ if True:
 
             retval = []
 
-            for i in prj.projectlayer_set.all():
-                lv = prj.compatible_layerversions(release = Release.objects.get(pk=new_release_id)).filter(layer__name = i.layercommit.layer.name)
+            for project in prj.projectlayer_set.all():
+                release = Release.objects.get(pk = new_release_id)
+
+                layer_versions = prj.get_all_compatible_layer_versions()
+                layer_versions = layer_versions.filter(release = release)
+                layer_versions = layer_versions.filter(layer__name = project.layercommit.layer.name)
+
                 # there is no layer_version with the new release id,
                 # and the same name
-                if lv.count() < 1:
-                    retval.append(i)
+                if layer_versions.count() < 1:
+                    retval.append(project)
 
             return response({"error":"ok",
                              "rows" : map( _lv_to_dict(prj),
@@ -2419,10 +2460,6 @@ if True:
                 pass
             try:
                 return_data['package_classes'] = ProjectVariable.objects.get(project = prj, name = "PACKAGE_CLASSES").value,
-            except ProjectVariable.DoesNotExist:
-                pass
-            try:
-                return_data['sdk_machine'] = ProjectVariable.objects.get(project = prj, name = "SDKMACHINE").value,
             except ProjectVariable.DoesNotExist:
                 pass
 
@@ -2582,7 +2619,155 @@ if True:
 
         return HttpResponse(jsonfilter({"error": "ok",}), content_type = "application/json")
 
+    @xhr_response
+    def xhr_customrecipe(request):
+        """
+        Custom image recipe REST API
 
+        Entry point: /xhr_customrecipe/
+        Method: POST
+
+        Args:
+            name: name of custom recipe to create
+            project: target project id of orm.models.Project
+            base: base recipe id of orm.models.Recipe
+
+        Returns:
+            {"error": "ok",
+             "url": <url of the created recipe>}
+            or
+            {"error": <error message>}
+        """
+        # check if request has all required parameters
+        for param in ('name', 'project', 'base'):
+            if param not in request.POST:
+                return {"error": "Missing parameter '%s'" % param}
+
+        # get project and baserecipe objects
+        params = {}
+        for name, model in [("project", Project),
+                            ("base", Recipe)]:
+            value = request.POST[name]
+            try:
+                params[name] = model.objects.get(id=value)
+            except model.DoesNotExist:
+                return {"error": "Invalid %s id %s" % (name, value)}
+
+        # create custom recipe
+        try:
+            recipe = CustomImageRecipe.objects.create(
+                         name=request.POST["name"],
+                         base_recipe=params["base"],
+                         project=params["project"])
+        except Error as err:
+            return {"error": "Can't create custom recipe: %s" % err}
+
+        # Find the package list from the last build of this recipe/target
+        build = Build.objects.filter(target__target=params['base'].name,
+                    project=params['project']).last()
+
+        if build:
+            # Copy in every package
+            # We don't want these packages to be linked to anything because
+            # that underlying data may change e.g. delete a build
+            for package in build.package_set.all():
+                # Create the duplicate
+                package.pk = None
+                package.save()
+                # Disassociate the package from the build
+                package.build = None
+                package.save()
+                recipe.packages.add(package)
+        else:
+            logger.warn("No packages found for this base recipe")
+
+        return {"error": "ok",
+                "url": reverse('customrecipe', args=(params['project'].pk,
+                                                     recipe.id))}
+
+    @xhr_response
+    def xhr_customrecipe_id(request, recipe_id):
+        """
+        Set of ReST API processors working with recipe id.
+
+        Entry point: /xhr_customrecipe/<recipe_id>
+
+        Methods:
+            GET - Get details of custom image recipe
+            DELETE - Delete custom image recipe
+
+        Returns:
+            GET:
+            {"error": "ok",
+             "info": dictionary of field name -> value pairs
+                     of the CustomImageRecipe model}
+            DELETE:
+            {"error": "ok"}
+            or
+            {"error": <error message>}
+        """
+        objects = CustomImageRecipe.objects.filter(id=recipe_id)
+        if not objects:
+            return {"error": "Custom recipe with id=%s "
+                             "not found" % recipe_id}
+        if request.method == 'GET':
+            values = CustomImageRecipe.objects.filter(id=recipe_id).values()
+            if values:
+                return {"error": "ok", "info": values[0]}
+            else:
+                return {"error": "Custom recipe with id=%s "
+                                 "not found" % recipe_id}
+            return {"error": "ok", "info": objects.values()[0]}
+        elif request.method == 'DELETE':
+            objects.delete()
+            return {"error": "ok"}
+        else:
+            return {"error": "Method %s is not supported" % request.method}
+
+    @xhr_response
+    def xhr_customrecipe_packages(request, recipe_id, package_id):
+        """
+        ReST API to add/remove packages to/from custom recipe.
+
+        Entry point: /xhr_customrecipe/<recipe_id>/packages/
+
+        Methods:
+            PUT - Add package to the recipe
+            DELETE - Delete package from the recipe
+
+        Returns:
+            {"error": "ok"}
+            or
+            {"error": <error message>}
+        """
+        try:
+            recipe = CustomImageRecipe.objects.get(id=recipe_id)
+        except CustomImageRecipe.DoesNotExist:
+            return {"error": "Custom recipe with id=%s "
+                             "not found" % recipe_id}
+
+        if request.method == 'GET' and not package_id:
+            return {"error": "ok",
+                    "packages": list(recipe.packages.values_list('id'))}
+
+        try:
+            package = Package.objects.get(id=package_id)
+        except Package.DoesNotExist:
+            return {"error": "Package with id=%s "
+                             "not found" % package_id}
+
+        if request.method == 'PUT':
+            recipe.packages.add(package)
+            return {"error": "ok"}
+        elif request.method == 'DELETE':
+            if package in recipe.packages.all():
+                recipe.packages.remove(package)
+                return {"error": "ok"}
+            else:
+                return {"error": "Package '%s' is not in the recipe '%s'" % \
+                                 (package.name, recipe.name)}
+        else:
+            return {"error": "Method %s is not supported" % request.method}
 
     def importlayer(request, pid):
         template = "importlayer.html"
@@ -2596,12 +2781,16 @@ if True:
         project = Project.objects.get(pk=pid)
         layer_version = Layer_Version.objects.get(pk=layerid)
 
-        context = { 'project' : project,
-                   'layerversion' : layer_version,
-                   'layerdeps' : { "list": [
-                     [{"id": y.id, "name": y.layer.name} for y in x.depends_on.get_equivalents_wpriority(project)][0] for x in layer_version.dependencies.all()]},
-                   'projectlayers': map(lambda prjlayer: prjlayer.layercommit.id, ProjectLayer.objects.filter(project=project))
-                  }
+        context = {'project' : project,
+            'layerversion' : layer_version,
+            'layerdeps' : {"list": [{"id": dep.id,
+                "name": dep.layer.name,
+                "layerdetailurl": reverse('layerdetails', args=(pid, dep.pk)),
+                "vcs_url": dep.layer.vcs_url,
+                "vcs_reference": dep.get_vcs_reference()} \
+                for dep in layer_version.get_alldeps(project.id)]},
+            'projectlayers': map(lambda prjlayer: prjlayer.layercommit.id, ProjectLayer.objects.filter(project=project))
+        }
 
         return context
 
@@ -2627,6 +2816,15 @@ if True:
         }
 
         return(vars_managed,sorted(vars_fstypes),vars_blacklist)
+
+    def customrecipe(request, pid, recipe_id):
+        project = Project.objects.get(pk=pid)
+        context = {'project' : project,
+                   'projectlayers': [],
+                   'recipe' : CustomImageRecipe.objects.get(pk=recipe_id)
+                  }
+
+        return render(request, "customrecipe.html", context)
 
     @_template_renderer("projectconf.html")
     def projectconf(request, pid):
@@ -2670,11 +2868,6 @@ if True:
         try:
             context['package_classes'] =  ProjectVariable.objects.get(project = prj, name = "PACKAGE_CLASSES").value
             context['package_classes_defined'] = "1"
-        except ProjectVariable.DoesNotExist:
-            pass
-        try:
-            context['sdk_machine'] =  ProjectVariable.objects.get(project = prj, name = "SDKMACHINE").value
-            context['sdk_machine_defined'] = "1"
         except ProjectVariable.DoesNotExist:
             pass
 
@@ -2732,6 +2925,9 @@ if True:
 
         context['project'] = prj
         _set_parameters_values(pagesize, orderby, request)
+
+        # add the most recent builds for this project
+        context['mru'] = _get_latest_builds(prj)
 
         return context
 
@@ -2797,7 +2993,7 @@ if True:
             if file_name is None:
                 raise Exception("Could not handle artifact %s id %s" % (artifact_type, artifact_id))
             else:
-                content_type = b.buildrequest.environment.get_artifact_type(file_name)
+                content_type = MimeTypeFinder.get_mimetype(file_name)
                 fsock = b.buildrequest.environment.get_artifact(file_name)
                 file_name = os.path.basename(file_name) # we assume that the build environment system has the same path conventions as host
 
