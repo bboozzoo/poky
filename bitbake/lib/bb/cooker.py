@@ -242,9 +242,9 @@ class BBCooker:
 
     def sigterm_exception(self, signum, stackframe):
         if signum == signal.SIGTERM:
-            bb.warn("Cooker recieved SIGTERM, shutting down...")
+            bb.warn("Cooker received SIGTERM, shutting down...")
         elif signum == signal.SIGHUP:
-            bb.warn("Cooker recieved SIGHUP, shutting down...")
+            bb.warn("Cooker received SIGHUP, shutting down...")
         self.state = state.forceshutdown
 
     def setFeatures(self, features):
@@ -725,7 +725,14 @@ class BBCooker:
         depend_tree["packages"] = {}
         depend_tree["rdepends-pkg"] = {}
         depend_tree["rrecs-pkg"] = {}
+        depend_tree['providermap'] = {}
         depend_tree["layer-priorities"] = self.recipecache.bbfile_config_priorities
+
+        for name, fn in taskdata.get_providermap().iteritems():
+            pn = self.recipecache.pkg_fn[fn]
+            if name != pn:
+                version = "%s:%s-%s" % self.recipecache.pkg_pepvpr[fn]
+                depend_tree['providermap'][name] = (pn, version)
 
         for task in xrange(len(rq.rqdata.runq_fnid)):
             taskname = rq.rqdata.runq_task[task]
@@ -1101,28 +1108,6 @@ class BBCooker:
         # generate a dependency tree for all our packages
         tree = self.generatePkgDepTreeData(pkgs, 'build')
         bb.event.fire(bb.event.TargetsTreeGenerated(tree), self.data)
-
-    def buildWorldTargetList(self):
-        """
-         Build package list for "bitbake world"
-        """
-        parselog.debug(1, "collating packages for \"world\"")
-        for f in self.recipecache.possible_world:
-            terminal = True
-            pn = self.recipecache.pkg_fn[f]
-
-            for p in self.recipecache.pn_provides[pn]:
-                if p.startswith('virtual/'):
-                    parselog.debug(2, "World build skipping %s due to %s provider starting with virtual/", f, p)
-                    terminal = False
-                    break
-                for pf in self.recipecache.providers[p]:
-                    if self.recipecache.pkg_fn[pf] != pn:
-                        parselog.debug(2, "World build skipping %s due to both us and %s providing %s", f, pf, p)
-                        terminal = False
-                        break
-            if terminal:
-                self.recipecache.world_target.add(pn)
 
     def interactiveMode( self ):
         """Drop off into a shell"""
@@ -1584,7 +1569,7 @@ class BBCooker:
                 parselog.warn("Explicit target \"%s\" is in ASSUME_PROVIDED, ignoring" % pkg)
 
         if 'world' in pkgs_to_build:
-            self.buildWorldTargetList()
+            bb.providers.buildWorldTargetList(self.recipecache)
             pkgs_to_build.remove('world')
             for t in self.recipecache.world_target:
                 pkgs_to_build.append(t)
@@ -1774,11 +1759,24 @@ class CookerCollectFiles(object):
         bbmask = config.getVar('BBMASK', True)
 
         if bbmask:
+            # First validate the individual regular expressions and ignore any
+            # that do not compile
+            bbmasks = []
+            for mask in bbmask.split():
+                try:
+                    re.compile(mask)
+                    bbmasks.append(mask)
+                except sre_constants.error:
+                    collectlog.critical("BBMASK contains an invalid regular expression, ignoring: %s" % mask)
+
+            # Then validate the combined regular expressions. This should never
+            # fail, but better safe than sorry...
+            bbmask = "|".join(bbmasks)
             try:
                 bbmask_compiled = re.compile(bbmask)
             except sre_constants.error:
-                collectlog.critical("BBMASK is not a valid regular expression, ignoring.")
-                return list(newfiles), 0
+                collectlog.critical("BBMASK is not a valid regular expression, ignoring: %s" % bbmask)
+                bbmask = None
 
         bbfiles = []
         bbappend = []
@@ -1988,8 +1986,6 @@ class CookerParser(object):
         self.total = len(filelist)
 
         self.current = 0
-        self.num_processes = int(self.cfgdata.getVar("BB_NUMBER_PARSE_THREADS", True) or
-                                 multiprocessing.cpu_count())
         self.process_names = []
 
         self.bb_cache = bb.cache.Cache(self.cfgdata, self.cfghash, cooker.caches_array)
@@ -2004,6 +2000,9 @@ class CookerParser(object):
         self.toparse = self.total - len(self.fromcache)
         self.progress_chunk = max(self.toparse / 100, 1)
 
+        self.num_processes = min(int(self.cfgdata.getVar("BB_NUMBER_PARSE_THREADS", True) or
+                                 multiprocessing.cpu_count()), len(self.willparse))
+
         self.start()
         self.haveshutdown = False
 
@@ -2014,6 +2013,7 @@ class CookerParser(object):
             bb.event.fire(bb.event.ParseStarted(self.toparse), self.cfgdata)
             def init():
                 Parser.cfg = self.cfgdata
+                bb.utils.set_process_name(multiprocessing.current_process().name)
                 multiprocessing.util.Finalize(None, bb.codeparser.parser_cache_save, args=(self.cfgdata,), exitpriority=1)
                 multiprocessing.util.Finalize(None, bb.fetch.fetcher_parse_save, args=(self.cfgdata,), exitpriority=1)
 
