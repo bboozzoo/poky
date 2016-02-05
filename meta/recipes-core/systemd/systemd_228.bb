@@ -22,7 +22,7 @@ DEPENDS = "kmod docbook-sgml-dtd-4.1-native intltool-native gperf-native acl rea
 
 SECTION = "base/shell"
 
-inherit useradd pkgconfig autotools perlnative update-rc.d update-alternatives qemu systemd ptest gettext
+inherit pkgconfig autotools perlnative update-rc.d update-alternatives qemu systemd ptest gettext
 
 SRCREV = "dd050decb6ad131ebdeabb71c4f9ecb4733269c0"
 
@@ -244,6 +244,14 @@ do_install() {
 		echo 'f /run/resolv.conf 0644 root root' >>${D}${exec_prefix}/lib/tmpfiles.d/systemd.conf
 	fi
 	install -Dm 0755 ${S}/src/systemctl/systemd-sysv-install.SKELETON ${D}${systemd_unitdir}/systemd-sysv-install
+	if ${@bb.utils.contains('PACKAGECONFIG', 'microhttpd', 'true', 'false', d)}; then
+		echo 'u systemd-journal-gateway - -' >> ${D}${libdir}/sysusers.d/systemd.conf
+	fi
+
+	if ${@bb.utils.contains('PACKAGECONFIG', 'timesyncd', 'true', 'false', d)}; then
+		echo 'u systemd-timesync - -' >> ${D}${libdir}/sysusers.d/systemd.conf
+	fi
+	echo 'g lock - -' >> ${D}${libdir}/sysusers.d/systemd.conf
 }
 
 do_install_ptest () {
@@ -284,10 +292,6 @@ PACKAGES =+ "\
 
 SYSTEMD_PACKAGES = "${PN}-binfmt"
 SYSTEMD_SERVICE_${PN}-binfmt = "systemd-binfmt.service"
-
-USERADD_PACKAGES = "${PN}"
-USERADD_PARAM_${PN} += "--system systemd-journal-gateway; --system systemd-timesync"
-GROUPADD_PARAM_${PN} = "-r lock; -r systemd-journal"
 
 FILES_${PN}-analyze = "${bindir}/systemd-analyze"
 
