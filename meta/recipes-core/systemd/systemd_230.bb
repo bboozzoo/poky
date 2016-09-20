@@ -36,7 +36,9 @@ SRC_URI += " \
            file://0021-include-missing.h-for-getting-secure_getenv-definiti.patch \
            file://0022-socket-util-don-t-fail-if-libc-doesn-t-support-IDN.patch \
            file://udev-re-enable-mount-propagation-for-udevd.patch \
-"
+           file://0023-nss-install-nss-modules-into-lib.patch \
+           file://0024-resolved-when-processing-auxiliary-DNSSEC-transactio.patch \
+           "
 SRC_URI_append_libc-uclibc = "\
            file://0002-units-Prefer-getty-to-agetty-in-console-setup-system.patch \
 "
@@ -452,7 +454,7 @@ FILES_${PN} = " ${base_bindir}/* \
                 ${rootlibexecdir}/systemd/* \
                 ${systemd_unitdir}/* \
                 ${base_libdir}/security/*.so \
-                ${libdir}/libnss_* \
+                ${rootlibdir}/libnss_* \
                 /cgroup \
                 ${bindir}/systemd* \
                 ${bindir}/busctl \
@@ -562,12 +564,24 @@ pkg_postinst_${PN} () {
 	sed -e '/^hosts:/s/\s*\<myhostname\>//' \
 		-e 's/\(^hosts:.*\)\(\<files\>\)\(.*\)\(\<dns\>\)\(.*\)/\1\2 myhostname \3\4\5/' \
 		-i $D${sysconfdir}/nsswitch.conf
+
+	if ${@bb.utils.contains('PACKAGECONFIG', 'resolved', 'true', 'false', d)}; then
+			# replace dns with resolve
+			sed -e 's/^hosts:\(.*\)dns\(.*\)/hosts:\1 resolve \2/' \
+					-i $D${sysconfdir}/nsswitch.conf
+	fi
 }
 
 pkg_prerm_${PN} () {
 	sed -e '/^hosts:/s/\s*\<myhostname\>//' \
 		-e '/^hosts:/s/\s*myhostname//' \
 		-i $D${sysconfdir}/nsswitch.conf
+
+	if ${@bb.utils.contains('PACKAGECONFIG', 'resolved', 'true', 'false', d)}; then
+			# restore dns
+			sed -e 's/^hosts:\(.*\)resolve\(.*\)/hosts:\1 dns \2/' \
+					-i $D${sysconfdir}/nsswitch.conf
+	fi
 }
 
 pkg_postinst_udev-hwdb () {

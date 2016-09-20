@@ -1,0 +1,49 @@
+From 44f04e32cb66676446b70895278348910f3666c3 Mon Sep 17 00:00:00 2001
+Message-Id: <44f04e32cb66676446b70895278348910f3666c3.1474443269.git.maciej.borzecki@rndity.com>
+In-Reply-To: <cover.1474443269.git.maciej.borzecki@rndity.com>
+References: <cover.1474443269.git.maciej.borzecki@rndity.com>
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 23 Jun 2016 23:46:56 +0200
+Subject: [PATCH 2/2] resolved: when processing auxiliary DNSSEC transactions,
+ accept those with SERVFAIL
+
+Some upstream DNS servers return SERVFAIL if we ask them for DNSSEC RRs, which
+some forwarding DNS servers pass on to us as SERVFAIL (other though as
+NOERROR...). This is should not be considered a problem, as long as the domain
+in question didn't have DNSSEC enabled. Hence: when making use of auxiliary
+transactions accept those that return SERVFAIL.
+
+Signed-off-by: Maciej Borzecki <maciej.borzecki@rndity.com>
+---
+Upstream-Status: Backport from 231
+
+ src/resolve/resolved-dns-transaction.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/src/resolve/resolved-dns-transaction.c b/src/resolve/resolved-dns-transaction.c
+index a4a6762..aa49e65 100644
+--- a/src/resolve/resolved-dns-transaction.c
++++ b/src/resolve/resolved-dns-transaction.c
+@@ -626,14 +626,15 @@ static int dns_transaction_dnssec_ready(DnsTransaction *t) {
+                         return 0;
+ 
+                 case DNS_TRANSACTION_RCODE_FAILURE:
+-                        if (dt->answer_rcode != DNS_RCODE_NXDOMAIN) {
++                        if (!IN_SET(dt->answer_rcode, DNS_RCODE_NXDOMAIN, DNS_RCODE_SERVFAIL)) {
+                                 log_debug("Auxiliary DNSSEC RR query failed with rcode=%s.", dns_rcode_to_string(dt->answer_rcode));
+                                 goto fail;
+                         }
+ 
+-                        /* Fall-through: NXDOMAIN is good enough for us. This is because some DNS servers erronously
+-                         * return NXDOMAIN for empty non-terminals (Akamai...), and we need to handle that nicely, when
+-                         * asking for parent SOA or similar RRs to make unsigned proofs. */
++                        /* Fall-through: NXDOMAIN/SERVFAIL is good enough for us. This is because some DNS servers
++                         * erronously return NXDOMAIN/SERVFAIL for empty non-terminals (Akamai...) or missing DS
++                         * records (Facebook), and we need to handle that nicely, when asking for parent SOA or similar
++                         * RRs to make unsigned proofs. */
+ 
+                 case DNS_TRANSACTION_SUCCESS:
+                         /* All good. */
+-- 
+2.5.0
+
