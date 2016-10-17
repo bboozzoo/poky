@@ -137,6 +137,7 @@ class KickStart():
         part.add_argument('--part-type')
         part.add_argument('--rootfs-dir')
         part.add_argument('--size', type=sizetype, default=0)
+        part.add_argument('--reserved-size', type=sizetype, default=0)
         part.add_argument('--source')
         part.add_argument('--sourceparams')
         part.add_argument('--system-id', type=systemidtype)

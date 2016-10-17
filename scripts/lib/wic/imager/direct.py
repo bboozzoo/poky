@@ -301,7 +301,8 @@ class DirectImageCreator(BaseImageCreator):
                                        no_table=part.no_table,
                                        part_type=part.part_type,
                                        uuid=part.uuid,
-                                       system_id=part.system_id)
+                                       system_id=part.system_id,
+                                       reserved_size=part.reserved_size)
 
         if fstab_path:
             shutil.move(fstab_path + ".orig", fstab_path)

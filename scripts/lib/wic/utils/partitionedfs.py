@@ -91,7 +91,7 @@ class Image():
 
     def add_partition(self, size, disk_name, mountpoint, source_file=None, fstype=None,
                       label=None, fsopts=None, boot=False, align=None, no_table=False,
-                      part_type=None, uuid=None, system_id=None):
+                      part_type=None, uuid=None, system_id=None, reserved_size=0):
         """ Add the next partition. Prtitions have to be added in the
         first-to-last order. """
 
@@ -99,9 +99,11 @@ class Image():
 
         # Converting kB to sectors for parted
         size = size * 1024 // self.sector_size
+        reserved_size = reserved_size * 1024 // self.sector_size
 
         part = {'ks_pnum': ks_pnum, # Partition number in the KS file
                 'size': size, # In sectors
+                'reserved_size': reserved_size, # space on disk reserved for partition
                 'mountpoint': mountpoint, # Mount relative to chroot
                 'source_file': source_file, # partition contents
                 'fstype': fstype, # Filesystem type
@@ -192,7 +194,19 @@ class Image():
                     disk['offset'] += align_sectors
 
             part['start'] = disk['offset']
-            disk['offset'] += part['size']
+
+            if part['reserved_size']:
+                if part['size'] > part['reserved_size']:
+                    msger.error("Partition %d on disk %s is larger (%s bytes) than its"
+                                " reserved space %s bytes" %
+                                (disk['numpart'], part['disk_name'],
+                                 part['size'] * self.sector_size,
+                                 part['reserved_size'] * self.sector_size))
+                # next partition starts after the space reserved for the
+                # current one
+                disk['offset'] += part['reserved_size']
+            else:
+                disk['offset'] += part['size']
 
             part['type'] = 'primary'
             if not part['no_table']:
@@ -207,10 +221,11 @@ class Image():
 
             disk['partitions'].append(num)
             msger.debug("Assigned %s to %s%d, sectors range %d-%d size %d "
-                        "sectors (%d bytes)." \
+                        "sectors (%d bytes), reserved %d bytes." \
                             % (part['mountpoint'], part['disk_name'], part['num'],
-                               part['start'], part['start'] + part['size'] - 1,
-                               part['size'], part['size'] * self.sector_size))
+                               part['start'], disk['offset'] - 1,
+                               part['size'], part['size'] * self.sector_size,
+                               part['reserved_size'] * self.sector_size))
 
         # Once all the partitions have been layed out, we can calculate the
         # minumim disk sizes.
@@ -288,17 +303,21 @@ class Image():
                 # Type for ext2/ext3/ext4/btrfs
                 parted_fs_type = "ext2"
 
+            psize = part['size']
+            if part['reserved_size']:
+                psize = part['reserved_size']
+
             # Boot ROM of OMAP boards require vfat boot partition to have an
             # even number of sectors.
             if part['mountpoint'] == "/boot" and part['fstype'] in ["vfat", "msdos"] \
-               and part['size'] % 2:
-                msger.debug("Substracting one sector from '%s' partition to " \
+               and psize % 2:
+                msger.debug("Subtracting one sector from '%s' partition to " \
                             "get even number of sectors for the partition" % \
                             part['mountpoint'])
-                part['size'] -= 1
+                psize -= 1
 
             self.__create_partition(disk['disk'].device, part['type'],
-                                    parted_fs_type, part['start'], part['size'])
+                                    parted_fs_type, part['start'], psize)
 
             if part['part_type']:
                 msger.debug("partition %d: set type UID to %s" % \

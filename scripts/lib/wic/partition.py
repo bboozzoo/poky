@@ -54,6 +54,7 @@ class Partition():
         self.part_type = args.part_type
         self.rootfs_dir = args.rootfs_dir
         self.size = args.size
+        self.reserved_size = args.reserved_size
         self.source = args.source
         self.sourceparams = args.sourceparams
         self.system_id = args.system_id

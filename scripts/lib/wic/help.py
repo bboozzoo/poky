@@ -646,6 +646,17 @@ DESCRIPTION
                  not specified, the size is in MB.
                  You do not need this option if you use --source.
 
+         --reserved-size: This option specifies that there should be
+                          at least that many bytes reserved for
+                          the partition during layout. This is useful
+                          when the target disk will be a subject
+                          to full system image updates in the future.
+                          Specifying --reserved-size ensures that
+                          there is extra space in the partition allowing
+                          for future growth of the file system stored
+                          inside. Value format is the same as for
+                          --size option.
+
          --source: This option is a wic-specific option that names the
                    source of the data that will populate the
                    partition.  The most common value for this option
