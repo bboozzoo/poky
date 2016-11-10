@@ -369,7 +369,8 @@ class Wic(oeSelfTest):
     def test_sdimage_bootpart(self):
         """Test creation of sdimage-bootpart image"""
         image = "sdimage-bootpart"
-        self.write_config('IMAGE_BOOT_FILES = "bzImage"\n')
+        kimgtype = get_bb_var('KERNEL_IMAGETYPE', self.OE_IMAGE)
+        self.write_config('IMAGE_BOOT_FILES = "%s"\n' % kimgtype)
         wic_cmd_vars = {
             'wks': image,
             'image': self.OE_IMAGE,
