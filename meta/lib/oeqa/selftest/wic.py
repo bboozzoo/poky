@@ -135,10 +135,10 @@ class Wic(oeSelfTest):
 
     @testcase(1211)
     def test_build_image_name(self):
-        """Test wic create directdisk --image-name=core-image-minimal"""
-        cmd = "wic create directdisk --image-name=core-image-minimal"
+        """Test wic create wictestdisk --image-name=core-image-minimal"""
+        cmd = "wic create wictestdisk --image-name=core-image-minimal"
         self.assertEqual(0, runCmd(cmd).status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
 
     @testcase(1157)
     def test_gpt_image(self):
@@ -209,84 +209,84 @@ class Wic(oeSelfTest):
 
     @testcase(1212)
     def test_build_artifacts(self):
-        """Test wic create directdisk providing all artifacts."""
+        """Test wic create wictestdisk providing all artifacts."""
         bbvars = dict((var.lower(), get_bb_var(var, 'core-image-minimal'))
                       for var in ('STAGING_DATADIR', 'DEPLOY_DIR_IMAGE',
                                   'STAGING_DIR_NATIVE', 'IMAGE_ROOTFS'))
-        status = runCmd("wic create directdisk "
+        status = runCmd("wic create wictestdisk "
                         "-b %(staging_datadir)s "
                         "-k %(deploy_dir_image)s "
                         "-n %(staging_dir_native)s "
                         "-r %(image_rootfs)s" % bbvars).status
         self.assertEqual(0, status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
 
     @testcase(1264)
     def test_compress_gzip(self):
         """Test compressing an image with gzip"""
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name core-image-minimal "
                                    "-c gzip").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct.gz")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct.gz")))
 
     @testcase(1265)
     def test_compress_bzip2(self):
         """Test compressing an image with bzip2"""
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "-c bzip2").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct.bz2")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct.bz2")))
 
     @testcase(1266)
     def test_compress_xz(self):
         """Test compressing an image with xz"""
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "--compress-with=xz").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct.xz")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct.xz")))
 
     @testcase(1267)
     def test_wrong_compressor(self):
         """Test how wic breaks if wrong compressor is provided"""
-        self.assertEqual(2, runCmd("wic create directdisk "
+        self.assertEqual(2, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "-c wrong", ignore_status=True).status)
 
     @testcase(1558)
     def test_debug(self):
         """Test debug"""
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "-D").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "--debug").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
 
     @testcase(1563)
     def test_skip_build_check(self):
         """Test skip build check"""
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "-s").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "--skip-build-check").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
 
     @testcase(1564)
     def test_build_rootfs(self):
         """Test build rootfs"""
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "-f").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=core-image-minimal "
                                    "--build-rootfs").status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*.direct")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*.direct")))
 
     @testcase(1268)
     def test_rootfs_indirect_recipes(self):
@@ -318,16 +318,16 @@ class Wic(oeSelfTest):
     @testcase(1496)
     def test_bmap(self):
         """Test generation of .bmap file"""
-        cmd = "wic create directdisk -e core-image-minimal -m"
+        cmd = "wic create wictestdisk -e core-image-minimal -m"
         status = runCmd(cmd).status
         self.assertEqual(0, status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*direct")))
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*direct.bmap")))
-        cmd = "wic create directdisk -e core-image-minimal --bmap"
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*direct")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*direct.bmap")))
+        cmd = "wic create wictestdisk -e core-image-minimal --bmap"
         status = runCmd(cmd).status
         self.assertEqual(0, status)
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*direct")))
-        self.assertEqual(1, len(glob(self.resultdir + "directdisk-*direct.bmap")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*direct")))
+        self.assertEqual(1, len(glob(self.resultdir + "wictestdisk-*direct.bmap")))
 
     def _get_image_env_path(self, image):
         """Generate and obtain the path to <image>.env"""
@@ -365,11 +365,11 @@ class Wic(oeSelfTest):
         image = 'core-image-minimal'
         imgenvdir = self._get_image_env_path(image)
 
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=%s "
                                    "-v %s"
                                    % (image, imgenvdir)).status)
-        self.assertEqual(0, runCmd("wic create directdisk "
+        self.assertEqual(0, runCmd("wic create wictestdisk "
                                    "--image-name=%s "
                                    "--vars %s"
                                    % (image, imgenvdir)).status)
