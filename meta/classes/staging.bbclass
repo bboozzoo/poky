@@ -521,7 +521,7 @@ python extend_recipe_sysroot() {
             native = True
         elif c.startswith("nativesdk-"):
             manifest = d2.expand("${SSTATE_MANIFESTS}/manifest-${SDK_ARCH}_${SDK_OS}-%s.populate_sysroot" % c)
-        elif "-cross-" in c:
+        elif "-cross-" in c or c.endswith("-cross"):
             manifest = d2.expand("${SSTATE_MANIFESTS}/manifest-${BUILD_ARCH}_${TARGET_ARCH}-%s.populate_sysroot" % c)
             native = True
         elif "-crosssdk" in c:
