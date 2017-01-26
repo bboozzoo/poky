@@ -20,6 +20,7 @@ import os
 from wic import msger
 from wic.pluginbase import SourcePlugin
 from wic.utils.oe.misc import get_bitbake_var
+from wic.filemap import sparse_copy
 
 class FSImagePlugin(SourcePlugin):
     """
@@ -66,8 +67,16 @@ class FSImagePlugin(SourcePlugin):
             msger.error("No file specified\n")
             return
 
-        src = os.path.join(bootimg_dir, source_params['file'])
+        src = source_params['file']
+        if not os.path.isabs(src):
+            src = os.path.join(bootimg_dir, source_params['file'])
+        dst = os.path.join(cr_workdir, "%s.%s" % (os.path.basename(source_params['file']),
+                                                  part.lineno))
+        if 'skip' in source_params:
+            sparse_copy(src, dst, skip=source_params['skip'])
+        else:
+            sparse_copy(src, dst)
 
 
-        msger.debug('Preparing partition using image %s' % (src))
-        part.prepare_rootfs_from_fs_image(cr_workdir, src, "")
+        msger.debug('Preparing partition using image %s' % (dst))
+        part.prepare_rootfs_from_fs_image(cr_workdir, dst, "")
