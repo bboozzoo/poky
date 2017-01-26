@@ -67,8 +67,11 @@ class RawCopyPlugin(SourcePlugin):
             msger.error("No file specified\n")
             return
 
-        src = os.path.join(bootimg_dir, source_params['file'])
-        dst = os.path.join(cr_workdir, "%s.%s" % (source_params['file'], part.lineno))
+        src = source_params['file']
+        if not os.path.isabs(src):
+            src = os.path.join(bootimg_dir, source_params['file'])
+        dst = os.path.join(cr_workdir, "%s.%s" % (os.path.basename(source_params['file']),
+                                                  part.lineno))
 
         if 'skip' in source_params:
             sparse_copy(src, dst, skip=source_params['skip'])
